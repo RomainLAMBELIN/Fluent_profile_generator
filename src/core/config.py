@@ -77,6 +77,7 @@ class ConfigManager:
                 "flow_eps": params.get("flow_eps"),
                 "methods": params.get("methods", {}),
                 "smooth_params": params.get("smooth_params", {}),
+                "trend_lambda": params.get("trend_lambda", {}),
                 # Ne pas sauvegarder les zones (trop spécifiques aux données)
             }
             self.config["last_step2_params"] = saveable
@@ -90,4 +91,31 @@ class ConfigManager:
         """Sauvegarde le dernier répertoire d'export utilisé."""
         if export_dir and os.path.exists(export_dir):
             self.config["last_export_dir"] = export_dir
+            self._save_config()
+
+    def get_last_csv_file(self):
+        """Récupère le dernier fichier CSV multi-colonnes utilisé."""
+        return self.config.get("last_csv_file", "")
+
+    def save_last_csv_file(self, csv_file):
+        """Sauvegarde le dernier fichier CSV multi-colonnes utilisé."""
+        if csv_file and os.path.exists(csv_file):
+            self.config["last_csv_file"] = csv_file
+            self._save_config()
+
+    def get_last_column_mapping(self):
+        """Récupère le dernier mapping de colonnes utilisé."""
+        return self.config.get("last_column_mapping", {})
+
+    def save_last_column_mapping(self, mapping_data):
+        """
+        Sauvegarde le dernier mapping de colonnes utilisé.
+
+        Args:
+            mapping_data: Dict avec les clés:
+                - time_col: nom de la colonne temps
+                - inlets: liste de dicts {q_col, t_col, name}
+        """
+        if mapping_data:
+            self.config["last_column_mapping"] = mapping_data
             self._save_config()

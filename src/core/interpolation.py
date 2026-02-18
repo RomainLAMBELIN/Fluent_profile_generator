@@ -1,32 +1,392 @@
 """
 Module d'interpolation et de lissage des données
+
+Ce module fournit plusieurs méthodes d'interpolation pour lisser les données
+de conditions aux limites destinées aux simulations CFD (Ansys Fluent).
+
+Méthodes disponibles :
+- PCHIP : Interpolation exacte monotone
+- Spline lissée : Contrôle du lissage via paramètre s
+- Trend Filtering : Lissage global robuste anti-oscillations (recommandé pour CFD)
+- Linéaire : Segments droits entre les points
 """
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import UnivariateSpline, PchipInterpolator, Akima1DInterpolator
 from scipy.signal import savgol_filter
-from typing import Tuple, List, Optional
+from scipy.optimize import minimize
+from scipy.sparse import diags, csc_matrix
+from scipy.sparse.linalg import spsolve
+from typing import Tuple, Optional
 
-from core.constants import (
-    MIN_POINTS_REQUIRED, SPLINE_DEGREE, DEFAULT_FLOW_EPS,
-    DEFAULT_SAVGOL_WINDOW, DEFAULT_SAVGOL_POLYORDER,
-)
+from core.constants import MIN_POINTS_REQUIRED, SPLINE_DEGREE, DEFAULT_FLOW_EPS, DEFAULT_SAVGOL_WINDOW, DEFAULT_SAVGOL_POLYORDER, DEFAULT_TREND_LAMBDA
 
 
-# ---------------------------------------------------------------------------
-# Méthodes d'interpolation simples (sans zones)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# MÉTHODES D'INTERPOLATION ANTI-OSCILLATIONS POUR CFD
+# =============================================================================
+
+def _apply_padding(x: np.ndarray, y: np.ndarray, n_pad: int = 3,
+                   method: str = "linear") -> Tuple[np.ndarray, np.ndarray, int, int]:
+    """
+    Applique un padding intelligent aux extrémités pour stabiliser l'interpolation.
+
+    Args:
+        x: Array des temps (non-uniforme accepté)
+        y: Array des valeurs
+        n_pad: Nombre de points de padding de chaque côté
+        method: Méthode de padding ("linear", "constant", "reflect")
+
+    Returns:
+        Tuple (x_padded, y_padded, n_left, n_right)
+    """
+    if n_pad <= 0:
+        return x, y, 0, 0
+
+    dx_start = np.mean(np.diff(x[:min(3, len(x))]))
+    dx_end = np.mean(np.diff(x[-min(3, len(x)):]))
+
+    x_left = []
+    y_left = []
+    x_right = []
+    y_right = []
+
+    if method == "linear":
+        if len(x) >= 2:
+            slope_start = (y[1] - y[0]) / (x[1] - x[0]) if x[1] != x[0] else 0
+            slope_start = np.clip(slope_start, -abs(y[0]) * 10, abs(y[0]) * 10) if y[0] != 0 else slope_start
+
+            for i in range(n_pad, 0, -1):
+                x_new = x[0] - i * dx_start
+                y_new = y[0] - i * dx_start * slope_start
+                x_left.append(x_new)
+                y_left.append(y_new)
+
+            slope_end = (y[-1] - y[-2]) / (x[-1] - x[-2]) if x[-1] != x[-2] else 0
+            slope_end = np.clip(slope_end, -abs(y[-1]) * 10, abs(y[-1]) * 10) if y[-1] != 0 else slope_end
+
+            for i in range(1, n_pad + 1):
+                x_new = x[-1] + i * dx_end
+                y_new = y[-1] + i * dx_end * slope_end
+                x_right.append(x_new)
+                y_right.append(y_new)
+
+    elif method == "constant":
+        for i in range(n_pad, 0, -1):
+            x_left.append(x[0] - i * dx_start)
+            y_left.append(y[0])
+
+        for i in range(1, n_pad + 1):
+            x_right.append(x[-1] + i * dx_end)
+            y_right.append(y[-1])
+
+    elif method == "reflect":
+        for i in range(n_pad, 0, -1):
+            idx = min(i, len(x) - 1)
+            x_left.append(x[0] - (x[idx] - x[0]))
+            y_left.append(2 * y[0] - y[idx])
+
+        for i in range(1, n_pad + 1):
+            idx = max(len(x) - 1 - i, 0)
+            x_right.append(x[-1] + (x[-1] - x[idx]))
+            y_right.append(2 * y[-1] - y[idx])
+
+    x_padded = np.concatenate([x_left, x, x_right])
+    y_padded = np.concatenate([y_left, y, y_right])
+
+    return x_padded, y_padded, len(x_left), len(x_right)
+
+
+def _build_difference_matrix(n: int, order: int = 2) -> np.ndarray:
+    """
+    Construit la matrice de différences finies d'ordre donné.
+
+    Args:
+        n: Nombre de points
+        order: Ordre de la différence (1 ou 2)
+
+    Returns:
+        Matrice de différences (n-order) x n
+    """
+    if order == 1:
+        diagonals = [-np.ones(n-1), np.ones(n-1)]
+        return diags(diagonals, [0, 1], shape=(n-1, n)).toarray()
+    elif order == 2:
+        diagonals = [np.ones(n-2), -2*np.ones(n-2), np.ones(n-2)]
+        return diags(diagonals, [0, 1, 2], shape=(n-2, n)).toarray()
+    else:
+        raise ValueError(f"Ordre {order} non supporté")
+
+
+def _trend_filter_l2(y: np.ndarray, x: np.ndarray, lambda_param: float,
+                     order: int = 2) -> np.ndarray:
+    """
+    Trend Filtering avec pénalité L2 (Ridge) sur les différences.
+
+    Résout : min_z ||y - z||_2^2 + lambda * ||D^(order) z||_2^2
+
+    Args:
+        y: Valeurs à lisser
+        x: Points temporels
+        lambda_param: Paramètre de régularisation (plus grand = plus lisse)
+        order: Ordre du trend filtering (1 ou 2)
+
+    Returns:
+        Valeurs lissées
+    """
+    n = len(y)
+    if n < order + 2:
+        return y.copy()
+
+    D = _build_difference_matrix(n, order)
+
+    I = np.eye(n)
+    DTD = D.T @ D
+
+    A = I + lambda_param * DTD
+
+    z = np.linalg.solve(A, y)
+
+    return z
+
+
+def _trend_filter_l1(y: np.ndarray, x: np.ndarray, lambda_param: float,
+                     order: int = 2, max_iter: int = 100, tol: float = 1e-6) -> np.ndarray:
+    """
+    Trend Filtering avec pénalité L1 (Total Variation) via ADMM.
+
+    Résout : min_z ||y - z||_2^2 + lambda * ||D^(order) z||_1
+
+    Args:
+        y: Valeurs à lisser
+        x: Points temporels
+        lambda_param: Paramètre de régularisation
+        order: Ordre du trend filtering
+        max_iter: Nombre maximum d'itérations ADMM
+        tol: Tolérance de convergence
+
+    Returns:
+        Valeurs lissées
+    """
+    n = len(y)
+    if n < order + 2:
+        return y.copy()
+
+    D = _build_difference_matrix(n, order)
+
+    rho = max(1.0, lambda_param)
+
+    z = y.copy()
+    u = np.zeros(n - order)
+    w = np.zeros(n - order)
+
+    I = np.eye(n)
+    DTD = D.T @ D
+    A = I + rho * DTD
+
+    try:
+        L = np.linalg.cholesky(A)
+        use_cholesky = True
+    except np.linalg.LinAlgError:
+        use_cholesky = False
+        A_inv = np.linalg.inv(A)
+
+    for iteration in range(max_iter):
+        z_old = z.copy()
+
+        rhs = y + rho * D.T @ (w - u)
+        if use_cholesky:
+            z = np.linalg.solve(L.T, np.linalg.solve(L, rhs))
+        else:
+            z = A_inv @ rhs
+
+        Dz = D @ z
+        v = Dz + u
+        threshold = lambda_param / rho
+        w = np.sign(v) * np.maximum(np.abs(v) - threshold, 0)
+
+        u = u + Dz - w
+
+        primal_residual = np.linalg.norm(Dz - w)
+
+        if primal_residual < tol * np.sqrt(n):
+            break
+
+    return z
+
+
+def interpolate_trend_filter(df: pd.DataFrame, t_new: np.ndarray,
+                            lambda_param: float = 1.0,
+                            penalty_type: str = "l2",
+                            order: int = 2,
+                            use_padding: bool = True,
+                            padding_points: int = 3,
+                            padding_method: str = "linear",
+                            clip_to_data_range: bool = False) -> np.ndarray:
+    """
+    Interpolation avec Trend Filtering - méthode recommandée pour CFD.
+
+    Args:
+        df: DataFrame avec colonnes 'Time_s' et 'Value'
+        t_new: Array numpy des temps d'évaluation
+        lambda_param: Paramètre de régularisation (0.01 à 100)
+        penalty_type: "l2" (Ridge) ou "l1" (Total Variation)
+        order: Ordre du filtering (1 ou 2)
+        use_padding: Appliquer le padding intelligent aux bords
+        padding_points: Nombre de points de padding
+        padding_method: Méthode de padding
+        clip_to_data_range: Si True, borne les résultats à [min(y), max(y)]
+
+    Returns:
+        Array numpy des valeurs interpolées aux points t_new
+    """
+    x = df["Time_s"].to_numpy()
+    y = df["Value"].to_numpy()
+
+    if len(x) < MIN_POINTS_REQUIRED:
+        raise ValueError(
+            f"Trop peu de points ({len(x)}), minimum {MIN_POINTS_REQUIRED} requis."
+        )
+
+    y_min, y_max = np.min(y), np.max(y)
+
+    if use_padding and padding_points > 0:
+        actual_padding_method = padding_method
+        if padding_method == "linear" and y_min >= 0:
+            if len(x) >= 2:
+                slope_start = (y[1] - y[0]) / (x[1] - x[0]) if x[1] != x[0] else 0
+                if y[0] - padding_points * abs(slope_start) * (x[1] - x[0]) < 0:
+                    actual_padding_method = "constant"
+
+        x_work, y_work, n_left, n_right = _apply_padding(
+            x, y, padding_points, actual_padding_method
+        )
+    else:
+        x_work, y_work = x, y
+        n_left, n_right = 0, 0
+
+    if penalty_type == "l1":
+        y_smooth = _trend_filter_l1(y_work, x_work, lambda_param, order)
+    else:
+        y_smooth = _trend_filter_l2(y_work, x_work, lambda_param, order)
+
+    if n_left > 0 or n_right > 0:
+        if n_right > 0:
+            y_smooth = y_smooth[n_left:-n_right]
+            x_work = x_work[n_left:-n_right]
+        else:
+            y_smooth = y_smooth[n_left:]
+            x_work = x_work[n_left:]
+
+    interpolator = PchipInterpolator(x_work, y_smooth, extrapolate=True)
+    result = interpolator(t_new)
+
+    if clip_to_data_range:
+        result = np.clip(result, y_min, y_max)
+
+    return result
+
+
+def compute_smoothness_metrics(x: np.ndarray, y: np.ndarray) -> dict:
+    """
+    Calcule des métriques de "violence" d'une courbe pour diagnostic CFD.
+
+    Args:
+        x: Array des temps
+        y: Array des valeurs
+
+    Returns:
+        Dict avec les métriques (max_slope, mean_slope, max_curvature, etc.)
+    """
+    if len(x) < 3:
+        return {
+            "max_slope": 0, "mean_slope": 0,
+            "max_curvature": 0, "mean_curvature": 0,
+            "slope_variation": 0, "severity": 0
+        }
+
+    slopes = np.diff(y) / np.diff(x)
+    slopes = np.where(np.isfinite(slopes), slopes, 0)
+
+    curvatures = []
+    for i in range(len(x) - 2):
+        h1 = x[i+1] - x[i]
+        h2 = x[i+2] - x[i+1]
+        if h1 > 0 and h2 > 0:
+            curv = 2 * ((y[i+2] - y[i+1])/h2 - (y[i+1] - y[i])/h1) / (h1 + h2)
+            curvatures.append(curv)
+    curvatures = np.array(curvatures) if curvatures else np.array([0])
+    curvatures = np.where(np.isfinite(curvatures), curvatures, 0)
+
+    max_slope = float(np.max(np.abs(slopes)))
+    mean_slope = float(np.mean(np.abs(slopes)))
+    max_curvature = float(np.max(np.abs(curvatures)))
+    mean_curvature = float(np.mean(np.abs(curvatures)))
+    slope_variation = float(np.std(slopes))
+
+    y_range = np.max(y) - np.min(y) if np.max(y) != np.min(y) else 1
+    x_range = np.max(x) - np.min(x) if np.max(x) != np.min(x) else 1
+
+    normalized_slope = max_slope * x_range / y_range if y_range > 0 else 0
+    normalized_curv = max_curvature * x_range**2 / y_range if y_range > 0 else 0
+
+    severity = min(100, 20 * np.log10(1 + normalized_slope) +
+                   30 * np.log10(1 + normalized_curv) +
+                   10 * np.log10(1 + slope_variation * x_range / y_range))
+    severity = max(0, severity)
+
+    return {
+        "max_slope": max_slope,
+        "mean_slope": mean_slope,
+        "max_curvature": max_curvature,
+        "mean_curvature": mean_curvature,
+        "slope_variation": slope_variation,
+        "severity": float(severity)
+    }
+
+
+# =============================================================================
+# FONCTIONS D'INTERPOLATION EXISTANTES
+# =============================================================================
+
+def apply_segment_interpolation(t_new: np.ndarray, interpolators: list, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """
+    Applique l'interpolation par segments.
+
+    Args:
+        t_new: Points d'évaluation
+        interpolators: Liste de dicts avec 'start', 'end', 'func'
+        x, y: Données brutes (pour fallback)
+
+    Returns:
+        Array des valeurs interpolées
+    """
+    result = np.zeros_like(t_new)
+    eps = 1e-10
+
+    for i, t in enumerate(t_new):
+        current_seg = None
+
+        for seg in interpolators:
+            if seg['start'] - eps <= t <= seg['end'] + eps:
+                current_seg = seg
+                break
+
+        if current_seg is None:
+            result[i] = np.interp(t, x, y)
+            continue
+
+        try:
+            result[i] = current_seg['func'](t)
+        except:
+            result[i] = np.interp(t, x, y)
+
+    return result
+
 
 def interpolate_pchip(df: pd.DataFrame, t_new: np.ndarray) -> np.ndarray:
-    """
-    Interpolation exacte avec PCHIP (Piecewise Cubic Hermite Interpolating Polynomial).
-
-    PCHIP garantit :
-    - Passage par tous les points de données
-    - Monotonie préservée
-    - Continuité de la dérivée première
-    """
+    """Interpolation exacte avec PCHIP."""
     x = df["Time_s"].to_numpy()
     y = df["Value"].to_numpy()
 
@@ -39,362 +399,256 @@ def interpolate_pchip(df: pd.DataFrame, t_new: np.ndarray) -> np.ndarray:
     return interpolator(t_new)
 
 
-def interpolate_akima(df: pd.DataFrame, t_new: np.ndarray) -> np.ndarray:
-    """Interpolation Akima (cubique locale minimisant les oscillations)."""
-    x = df["Time_s"].to_numpy()
-    y = df["Value"].to_numpy()
-
-    if len(x) < 5:
-        return interpolate_pchip(df, t_new)
-
-    interpolator = Akima1DInterpolator(x, y)
-    return interpolator(t_new)
-
-
-def interpolate_makima(df: pd.DataFrame, t_new: np.ndarray) -> np.ndarray:
-    """Interpolation Makima (Modified Akima, robuste aux valeurs aberrantes)."""
-    x = df["Time_s"].to_numpy()
-    y = df["Value"].to_numpy()
-
-    if len(x) < 5:
-        return interpolate_pchip(df, t_new)
-
-    try:
-        interpolator = Akima1DInterpolator(x, y, method="makima")
-    except TypeError:
-        # Fallback si cette version de scipy ne supporte pas method="makima"
-        interpolator = Akima1DInterpolator(x, y)
-
-    return interpolator(t_new)
-
-
-def interpolate_savgol(
-    df: pd.DataFrame,
-    t_new: np.ndarray,
-    window_length: int = DEFAULT_SAVGOL_WINDOW,
-    polyorder: int = DEFAULT_SAVGOL_POLYORDER,
-) -> np.ndarray:
-    """Filtrage Savitzky-Golay suivi d'une interpolation PCHIP."""
-    x = df["Time_s"].to_numpy()
-    y = df["Value"].to_numpy()
-
-    if len(x) < window_length:
-        return interpolate_pchip(df, t_new)
-
-    # Assurer que window_length est impair et > polyorder
-    if window_length % 2 == 0:
-        window_length += 1
-    if window_length <= polyorder:
-        window_length = polyorder + 2
-        if window_length % 2 == 0:
-            window_length += 1
-
-    y_filtered = savgol_filter(y, window_length, polyorder)
-    interpolator = PchipInterpolator(x, y_filtered, extrapolate=True)
-    return interpolator(t_new)
-
-
-def _interpolate_simple_spline(
-    x: np.ndarray, y: np.ndarray, t_new: np.ndarray, smooth_factor: float
-) -> np.ndarray:
-    """Interpolation spline cubique simple (sans zones)."""
-    n = len(x)
-    rng = float(np.max(y) - np.min(y))
-    s = 0.0 if (smooth_factor <= 0 or rng == 0) else n * (smooth_factor * rng) ** 2
-    spl = UnivariateSpline(x, y, k=SPLINE_DEGREE, s=s)
-    return spl(t_new)
-
-
-# ---------------------------------------------------------------------------
-# Création d'interpolateurs par segment
-# ---------------------------------------------------------------------------
-
-def _make_segment_interpolator(
-    seg_type: str,
-    x_seg: np.ndarray,
-    y_seg: np.ndarray,
-    method: str,
-    smooth_factor: float,
-):
+def interpolate_with_zones(df: pd.DataFrame, t_new: np.ndarray, method: str = "pchip",
+                          smooth_factor: float = 0.01, unfiltered_zones: list = None,
+                          trend_lambda: float = 1.0) -> np.ndarray:
     """
-    Crée un interpolateur callable pour un segment donné.
+    Interpolation SEGMENTÉE avec zones spéciales.
+
+    Fonctionne avec toutes les méthodes (pchip, spline, linear, trend_l2, trend_l1).
 
     Args:
-        seg_type: "global" ou type de zone ("exact", "linear")
-        x_seg, y_seg: données du segment
-        method: méthode globale (pour segments "global")
-        smooth_factor: facteur de lissage (pour spline)
+        df: DataFrame avec colonnes 'Time_s' et 'Value'
+        t_new: Array numpy des temps d'évaluation
+        method: Méthode pour les segments globaux
+        smooth_factor: Facteur de lissage (pour spline)
+        unfiltered_zones: Liste de tuples (t_start, t_end, type)
+        trend_lambda: Paramètre lambda pour trend filtering
 
     Returns:
-        callable(t) -> valeur interpolée
+        Array numpy des valeurs interpolées
     """
-    if len(x_seg) < 2:
-        val = y_seg[0] if len(y_seg) > 0 else 0.0
-        return lambda t, v=val: np.full_like(np.atleast_1d(t), v, dtype=float)
-
-    # --- Zones spéciales ---
-    if seg_type == "exact":
-        interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
-        return lambda t, f=interp: f(t)
-
-    if seg_type == "linear":
-        t1, y1 = x_seg[0], y_seg[0]
-        t2, y2 = x_seg[-1], y_seg[-1]
-        if t2 != t1:
-            return lambda t, _t1=t1, _y1=y1, _t2=t2, _y2=y2: _y1 + (_y2 - _y1) * (t - _t1) / (_t2 - _t1)
-        return lambda t, v=y1: np.full_like(np.atleast_1d(t), v, dtype=float)
-
-    # --- Segments globaux ---
-    if method == "pchip":
-        interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
-        return lambda t, f=interp: f(t)
-
     if method == "spline":
-        if len(x_seg) >= MIN_POINTS_REQUIRED:
-            n_seg = len(x_seg)
-            rng_seg = float(np.max(y_seg) - np.min(y_seg)) if n_seg > 1 else 1.0
-            s_seg = 0.0 if rng_seg == 0 else n_seg * (smooth_factor * rng_seg) ** 2
-            interp = UnivariateSpline(x_seg, y_seg, k=min(3, len(x_seg) - 1), s=s_seg)
-            return lambda t, f=interp: f(t)
-        interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
-        return lambda t, f=interp: f(t)
+        return interpolate_smooth(df, t_new, smooth_factor, unfiltered_zones)
 
-    if method == "linear":
-        xs, ys = x_seg.copy(), y_seg.copy()
-        return lambda t, _xs=xs, _ys=ys: np.interp(np.atleast_1d(t), _xs, _ys)
+    x = df["Time_s"].to_numpy()
+    y = df["Value"].to_numpy()
 
-    if method == "akima":
-        if len(x_seg) >= 5:
-            interp = Akima1DInterpolator(x_seg, y_seg)
-            return lambda t, f=interp: f(t)
-        interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
-        return lambda t, f=interp: f(t)
+    if len(x) < MIN_POINTS_REQUIRED:
+        raise ValueError(f"Trop peu de points ({len(x)}), minimum {MIN_POINTS_REQUIRED} requis.")
 
-    if method == "makima":
-        if len(x_seg) >= 5:
-            try:
-                interp = Akima1DInterpolator(x_seg, y_seg, method="makima")
-            except TypeError:
-                interp = Akima1DInterpolator(x_seg, y_seg)
-            return lambda t, f=interp: f(t)
-        interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
-        return lambda t, f=interp: f(t)
-
-    if method == "savgol":
-        wl = DEFAULT_SAVGOL_WINDOW
-        po = DEFAULT_SAVGOL_POLYORDER
-        if len(x_seg) >= wl:
-            if wl % 2 == 0:
-                wl += 1
-            y_filt = savgol_filter(y_seg, wl, po)
-        else:
-            y_filt = y_seg
-        interp = PchipInterpolator(x_seg, y_filt, extrapolate=False)
-        return lambda t, f=interp: f(t)
-
-    # Fallback: PCHIP
-    interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
-    return lambda t, f=interp: f(t)
-
-
-# ---------------------------------------------------------------------------
-# Interpolation segmentée unifiée (avec zones)
-# ---------------------------------------------------------------------------
-
-def _build_segments(
-    x: np.ndarray, y: np.ndarray,
-    method: str, smooth_factor: float,
-    zones: List[tuple],
-) -> list:
-    """
-    Construit la liste des segments interpolateurs à partir des zones.
-
-    Returns:
-        Liste de dicts {'start': float, 'end': float, 'func': callable}
-    """
-    # Parser et trier les zones
-    zones_parsed = []
-    for zone in zones:
+    zones_list = []
+    for zone in unfiltered_zones:
         if len(zone) == 3:
             t_start, t_end, ztype = zone
         else:
             t_start, t_end = zone
             ztype = "exact"
-        zones_parsed.append((t_start, t_end, ztype))
-    zones_parsed.sort(key=lambda z: z[0])
+        zones_list.append((t_start, t_end, ztype))
+    zones_list.sort(key=lambda z: z[0])
 
-    # Trouver les indices de borne pour chaque zone
     zone_boundaries = []
-    for t_start, t_end, ztype in zones_parsed:
-        idx_start = int(np.argmin(np.abs(x - t_start)))
-        idx_end = int(np.argmin(np.abs(x - t_end)))
-        zone_boundaries.append((idx_start, idx_end, ztype))
+    for t_start, t_end, ztype in zones_list:
+        idx_start = np.argmin(np.abs(x - t_start))
+        idx_end = np.argmin(np.abs(x - t_end))
+        zone_boundaries.append((idx_start, idx_end, t_start, t_end, ztype))
 
-    # Créer les segments (indices)
-    raw_segments = []
+    segments = []
     current_idx = 0
 
-    for idx_start, idx_end, ztype in zone_boundaries:
+    for idx_start, idx_end, t_start, t_end, ztype in zone_boundaries:
         if current_idx < idx_start:
-            raw_segments.append(("global", current_idx, idx_start - 1))
-        raw_segments.append((ztype, idx_start, idx_end))
+            segments.append((method + "_global", current_idx, idx_start - 1))
+        segments.append((ztype + "_zone", idx_start, idx_end))
         current_idx = idx_end + 1
 
     if current_idx < len(x):
-        raw_segments.append(("global", current_idx, len(x) - 1))
+        segments.append((method + "_global", current_idx, len(x) - 1))
 
-    # Construire les interpolateurs
     interpolators = []
-    for seg_type, idx_s, idx_e in raw_segments:
-        idx_e = min(idx_e, len(x) - 1)
-        x_seg = x[idx_s:idx_e + 1]
-        y_seg = y[idx_s:idx_e + 1]
+
+    for seg_type, idx_start, idx_end in segments:
+        idx_end_incl = min(idx_end, len(x) - 1)
+
+        x_seg = x[idx_start:idx_end_incl+1]
+        y_seg = y[idx_start:idx_end_incl+1]
 
         if len(x_seg) < 2:
             continue
 
-        func = _make_segment_interpolator(seg_type, x_seg, y_seg, method, smooth_factor)
+        seg_t_start = x_seg[0]
+        seg_t_end = x_seg[-1]
+
+        if seg_type == "pchip_global" or seg_type == "exact_zone":
+            if len(x_seg) >= 2:
+                interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
+            else:
+                interp = lambda t, val=y_seg[0]: val
+
+        elif seg_type == "linear_global":
+            if len(x_seg) >= 2:
+                interp = lambda t, xs=x_seg.copy(), ys=y_seg.copy(): np.interp(t, xs, ys)
+            else:
+                interp = lambda t, val=y_seg[0]: val
+
+        elif seg_type == "linear_zone":
+            t1, y1 = x_seg[0], y_seg[0]
+            t2, y2 = x_seg[-1], y_seg[-1]
+
+            if t2 != t1:
+                interp = lambda t, t1=t1, y1=y1, t2=t2, y2=y2: y1 + (y2 - y1) * (t - t1) / (t2 - t1)
+            else:
+                interp = lambda t, y1=y1: y1
+
+        elif seg_type in ["trend_l2_global", "trend_l1_global"]:
+            if len(x_seg) >= MIN_POINTS_REQUIRED:
+                penalty_type = "l2" if "l2" in seg_type else "l1"
+                if penalty_type == "l2":
+                    y_smooth = _trend_filter_l2(y_seg, x_seg, trend_lambda, order=2)
+                else:
+                    y_smooth = _trend_filter_l1(y_seg, x_seg, trend_lambda, order=2)
+                interp = PchipInterpolator(x_seg, y_smooth, extrapolate=False)
+            elif len(x_seg) >= 2:
+                interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
+            else:
+                interp = lambda t, val=y_seg[0]: val
+
+        else:
+            if len(x_seg) >= 2:
+                interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
+            else:
+                interp = lambda t, val=y_seg[0]: val
+
         interpolators.append({
-            "start": x_seg[0],
-            "end": x_seg[-1],
-            "func": func,
+            'type': seg_type,
+            'start': seg_t_start,
+            'end': seg_t_end,
+            'func': interp
         })
 
-    return interpolators
-
-
-def _apply_hermite_transitions(
-    t_new: np.ndarray,
-    interpolators: list,
-    x: np.ndarray,
-    y: np.ndarray,
-    transition_ratio: float = 0.02,
-) -> np.ndarray:
-    """
-    Interpole t_new segment par segment avec transitions Hermite C1 aux jonctions.
-
-    Vectorisé par segment pour de meilleures performances.
-    """
-    result = np.interp(t_new, x, y)  # fallback par défaut
-    eps = 1e-10
-
-    if not interpolators:
-        return result
-
-    # Pré-calculer les zones de transition pour chaque jonction
-    n_seg = len(interpolators)
-    transitions = []  # (junction_t, trans_start, trans_end, seg_idx_prev, seg_idx_next)
-
-    for k in range(n_seg - 1):
-        seg_curr = interpolators[k]
-        seg_next = interpolators[k + 1]
-        junction_t = seg_next["start"]
-        seg_width = seg_curr["end"] - seg_curr["start"]
-        tw = max(transition_ratio * seg_width, eps * 100)
-        trans_start = junction_t - tw
-        trans_end = junction_t + eps
-        transitions.append((junction_t, trans_start, trans_end, tw, k, k + 1))
-
-    # Remplir segment par segment (vectorisé)
-    for idx, seg in enumerate(interpolators):
-        mask = (t_new >= seg["start"] - eps) & (t_new <= seg["end"] + eps)
-        if not np.any(mask):
-            continue
-        t_seg = t_new[mask]
-        try:
-            vals = np.atleast_1d(seg["func"](t_seg))
-            result[mask] = vals
-        except Exception:
-            pass  # garde le fallback linéaire
-
-    # Appliquer les transitions Hermite aux jonctions
-    for junction_t, trans_start, trans_end, tw, idx_prev, idx_next in transitions:
-        mask = (t_new >= trans_start) & (t_new <= trans_end + eps)
-        if not np.any(mask):
-            continue
-
-        t_trans = t_new[mask]
-        seg_prev = interpolators[idx_prev]
-        seg_next = interpolators[idx_next]
-
-        try:
-            t_norm = np.clip((t_trans - trans_start) / tw, 0.0, 1.0)
-
-            # Valeurs aux bords
-            v_prev = np.atleast_1d(seg_prev["func"](t_trans))
-            v_next_at_junction = float(np.atleast_1d(seg_next["func"](junction_t + eps))[0])
-
-            # Dérivées par différences finies
-            dt_deriv = tw * 0.01
-            if junction_t - dt_deriv >= seg_prev["start"]:
-                v_before = np.atleast_1d(seg_prev["func"](junction_t - dt_deriv))
-                v_at = np.atleast_1d(seg_prev["func"](junction_t - eps))
-                d_prev = float(((v_at - v_before) / dt_deriv)[0])
-            else:
-                d_prev = 0.0
-
-            if junction_t + dt_deriv <= seg_next["end"]:
-                v_after = np.atleast_1d(seg_next["func"](junction_t + dt_deriv))
-                d_next = float(((v_after - v_next_at_junction) / dt_deriv)[0])
-            else:
-                d_next = 0.0
-
-            # Hermite cubique (vectorisé)
-            t2 = t_norm * t_norm
-            t3 = t2 * t_norm
-            h00 = 2 * t3 - 3 * t2 + 1
-            h10 = t3 - 2 * t2 + t_norm
-            h01 = -2 * t3 + 3 * t2
-            h11 = t3 - t2
-
-            result[mask] = (
-                h00 * v_prev
-                + h10 * d_prev * tw
-                + h01 * v_next_at_junction
-                + h11 * d_next * tw
-            )
-        except Exception:
-            pass  # garde les valeurs déjà calculées
-
+    result = apply_segment_interpolation(t_new, interpolators, x, y)
     return result
 
 
-def _interpolate_segmented(
-    df: pd.DataFrame,
-    t_new: np.ndarray,
-    method: str,
-    smooth_factor: float,
-    zones: list,
-    transition_ratio: float = 0.02,
-) -> np.ndarray:
-    """
-    Interpolation segmentée unifiée. Gère toutes les méthodes avec zones.
-    """
+def interpolate_smooth(df: pd.DataFrame, t_new: np.ndarray, smooth_factor: float = 0.01, unfiltered_zones: list = None) -> np.ndarray:
+    """Interpolation lissée avec spline cubique SEGMENTÉE."""
     x = df["Time_s"].to_numpy()
     y = df["Value"].to_numpy()
 
     if len(x) < MIN_POINTS_REQUIRED:
+        raise ValueError(f"Trop peu de points ({len(x)}), minimum {MIN_POINTS_REQUIRED} requis.")
+
+    if unfiltered_zones is None or len(unfiltered_zones) == 0:
+        n = len(x)
+        rng = float(np.max(y) - np.min(y))
+        s = 0.0 if (smooth_factor <= 0 or rng == 0) else n * (smooth_factor * rng) ** 2
+        spl = UnivariateSpline(x, y, k=SPLINE_DEGREE, s=s)
+        return spl(t_new)
+
+    zones_list = []
+    for zone in unfiltered_zones:
+        if len(zone) == 3:
+            t_start, t_end, ztype = zone
+        else:
+            t_start, t_end = zone
+            ztype = "exact"
+        zones_list.append((t_start, t_end, ztype))
+    zones_list.sort(key=lambda z: z[0])
+
+    zone_boundaries = []
+    for t_start, t_end, ztype in zones_list:
+        idx_start = np.argmin(np.abs(x - t_start))
+        idx_end = np.argmin(np.abs(x - t_end))
+        zone_boundaries.append((idx_start, idx_end, t_start, t_end, ztype))
+
+    segments = []
+    current_idx = 0
+
+    for idx_start, idx_end, t_start, t_end, ztype in zone_boundaries:
+        if current_idx < idx_start:
+            segments.append(('global', current_idx, idx_start - 1))
+        segments.append((ztype, idx_start, idx_end))
+        current_idx = idx_end + 1
+
+    if current_idx < len(x):
+        segments.append(('global', current_idx, len(x) - 1))
+
+    interpolators = []
+
+    for seg_type, idx_start, idx_end in segments:
+        idx_end_incl = min(idx_end, len(x) - 1)
+
+        x_seg = x[idx_start:idx_end_incl+1]
+        y_seg = y[idx_start:idx_end_incl+1]
+
+        if len(x_seg) < 2:
+            continue
+
+        seg_t_start = x_seg[0]
+        seg_t_end = x_seg[-1]
+
+        if seg_type == 'global':
+            if len(x_seg) >= MIN_POINTS_REQUIRED:
+                n_seg = len(x_seg)
+                rng_seg = float(np.max(y_seg) - np.min(y_seg)) if len(y_seg) > 1 else 1.0
+                s_seg = 0.0 if rng_seg == 0 else n_seg * (smooth_factor * rng_seg) ** 2
+                interp = UnivariateSpline(x_seg, y_seg, k=min(3, len(x_seg)-1), s=s_seg)
+            elif len(x_seg) >= 2:
+                interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
+            else:
+                interp = lambda t, val=y_seg[0]: val
+
+        elif seg_type == 'exact':
+            if len(x_seg) >= 2:
+                interp = PchipInterpolator(x_seg, y_seg, extrapolate=False)
+            else:
+                interp = lambda t, val=y_seg[0]: val
+
+        elif seg_type == 'linear':
+            t1, y1 = x_seg[0], y_seg[0]
+            t2, y2 = x_seg[-1], y_seg[-1]
+
+            if t2 != t1:
+                interp = lambda t, t1=t1, y1=y1, t2=t2, y2=y2: y1 + (y2 - y1) * (t - t1) / (t2 - t1)
+            else:
+                interp = lambda t, y1=y1: y1
+
+        interpolators.append({
+            'type': seg_type,
+            'start': seg_t_start,
+            'end': seg_t_end,
+            'func': interp
+        })
+
+    result = apply_segment_interpolation(t_new, interpolators, x, y)
+    return result
+
+
+def interpolate_trend(
+    df: pd.DataFrame,
+    t_new: np.ndarray,
+    lambda_param: float = 1.0,
+    method: str = "trend_l2",
+    use_padding: bool = True,
+    padding_points: int = 3
+) -> np.ndarray:
+    """Interpolation avec lissage Trend Filtering."""
+    if len(df) < MIN_POINTS_REQUIRED:
         raise ValueError(
-            f"Trop peu de points ({len(x)}), minimum {MIN_POINTS_REQUIRED} requis."
+            f"Trop peu de points ({len(df)}), minimum {MIN_POINTS_REQUIRED} requis."
         )
 
-    interpolators = _build_segments(x, y, method, smooth_factor, zones)
-    return _apply_hermite_transitions(t_new, interpolators, x, y, transition_ratio)
+    penalty_type = "l1" if method == "trend_l1" else "l2"
 
+    return interpolate_trend_filter(
+        df=df,
+        t_new=t_new,
+        lambda_param=lambda_param,
+        penalty_type=penalty_type,
+        order=2,
+        use_padding=use_padding,
+        padding_points=padding_points,
+        padding_method="linear"
+    )
 
-# ---------------------------------------------------------------------------
-# Point d'entrée principal
-# ---------------------------------------------------------------------------
 
 def interpolate(
     df: pd.DataFrame,
     t_new: np.ndarray,
     method: str = "pchip",
     smooth_factor: float = 0.01,
-    unfiltered_zones: Optional[list] = None,
-    savgol_window: int = DEFAULT_SAVGOL_WINDOW,
-    savgol_polyorder: int = DEFAULT_SAVGOL_POLYORDER,
-    transition_ratio: float = 0.02,
+    unfiltered_zones: list = None,
+    trend_lambda: float = 1.0
 ) -> np.ndarray:
     """
     Interpolation avec choix de la méthode.
@@ -402,53 +656,42 @@ def interpolate(
     Args:
         df: DataFrame avec colonnes 'Time_s' et 'Value'
         t_new: Array numpy des temps d'évaluation
-        method: "pchip", "spline", "linear", "akima", "makima", "savgol"
+        method: "pchip", "spline", "linear", "trend_l2", "trend_l1"
         smooth_factor: Facteur de lissage (pour "spline")
         unfiltered_zones: Liste de tuples (t_start, t_end, type) pour zones
-        savgol_window: Taille de fenêtre Savitzky-Golay
-        savgol_polyorder: Degré polynomial Savitzky-Golay
-        transition_ratio: Ratio de transition Hermite (0.02 = 2%)
+        trend_lambda: Paramètre lambda pour trend filtering
+
+    Returns:
+        Array numpy des valeurs interpolées
     """
-    has_zones = unfiltered_zones is not None and len(unfiltered_zones) > 0
+    if unfiltered_zones is None or len(unfiltered_zones) == 0:
+        if method == "pchip":
+            return interpolate_pchip(df, t_new)
+        elif method == "spline":
+            return interpolate_smooth(df, t_new, smooth_factor, None)
+        elif method == "linear":
+            x = df["Time_s"].to_numpy()
+            y = df["Value"].to_numpy()
+            return np.interp(t_new, x, y)
+        elif method in ["trend_l2", "trend_l1"]:
+            return interpolate_trend(df, t_new, lambda_param=trend_lambda, method=method)
+        else:
+            return interpolate_pchip(df, t_new)
 
-    # Avec zones → interpolation segmentée pour toutes les méthodes
-    if has_zones:
-        return _interpolate_segmented(
-            df, t_new, method, smooth_factor, unfiltered_zones, transition_ratio
-        )
+    if method in ["trend_l2", "trend_l1"]:
+        return interpolate_with_zones(df, t_new, method, smooth_factor, unfiltered_zones, trend_lambda)
 
-    # Sans zones → méthode directe
-    if method == "pchip":
-        return interpolate_pchip(df, t_new)
-    if method == "spline":
-        x = df["Time_s"].to_numpy()
-        y = df["Value"].to_numpy()
-        return _interpolate_simple_spline(x, y, t_new, smooth_factor)
-    if method == "linear":
-        x = df["Time_s"].to_numpy()
-        y = df["Value"].to_numpy()
-        return np.interp(t_new, x, y)
-    if method == "akima":
-        return interpolate_akima(df, t_new)
-    if method == "makima":
-        return interpolate_makima(df, t_new)
-    if method == "savgol":
-        return interpolate_savgol(df, t_new, savgol_window, savgol_polyorder)
-
-    # Fallback
-    return interpolate_pchip(df, t_new)
+    return interpolate_with_zones(df, t_new, method, smooth_factor, unfiltered_zones)
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Utilitaires
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def sanitize_flow(values: np.ndarray, flow_eps: float = DEFAULT_FLOW_EPS) -> Tuple[np.ndarray, int]:
-    """
-    Remplace les valeurs nulles par flow_eps pour éviter les divergences dans Fluent.
-    """
-    result = values.copy()
-    zero_mask = result == 0.0
+    """Remplace les valeurs nulles par flow_eps pour éviter les divergences dans Fluent."""
+    result = values.astype(np.float64)
+    zero_mask = (result == 0.0)
     n_replaced = int(zero_mask.sum())
 
     if n_replaced > 0:
@@ -474,25 +717,39 @@ def interpolate_all_data(
     methods: dict,
     smooth_params: dict,
     flow_eps: float = DEFAULT_FLOW_EPS,
-    unfiltered_zones: Optional[dict] = None,
-    inlet_names: Optional[dict] = None,
-    savgol_params: Optional[dict] = None,
+    unfiltered_zones: dict = None,
+    inlet_names: dict = None,
+    trend_lambda_params: dict = None
 ) -> dict:
     """
     Interpole toutes les données avec les paramètres spécifiés par courbe.
+
+    Args:
+        data_raw: Dictionnaire {clé: DataFrame}
+        times: Array des temps d'évaluation
+        methods: Dict {key: method}
+        smooth_params: Dict {key: smooth_factor}
+        flow_eps: Valeur de remplacement pour les débits nuls
+        unfiltered_zones: Dict {key: [(t_start, t_end), ...]}
+        inlet_names: Dictionnaire {"inlet1": "nom1", ...}
+        trend_lambda_params: Dict {key: lambda_value}
+
+    Returns:
+        Dictionnaire {clé_renommée: array_interpolé}
     """
     result = {}
 
     if inlet_names is None:
-        inlet_names = {"inlet1": "inlet1", "inlet2": "inlet2"}
+        inlet_names = {}
     if unfiltered_zones is None:
         unfiltered_zones = {}
-    if savgol_params is None:
-        savgol_params = {"window": DEFAULT_SAVGOL_WINDOW, "polyorder": DEFAULT_SAVGOL_POLYORDER}
+    if trend_lambda_params is None:
+        trend_lambda_params = {}
 
     for key, df in data_raw.items():
         method = methods.get(key, "spline")
         smooth = smooth_params.get(key, 0.01)
+        trend_lambda = trend_lambda_params.get(key, DEFAULT_TREND_LAMBDA)
         zones_for_key = unfiltered_zones.get(key, [])
 
         interp = interpolate(
@@ -501,15 +758,14 @@ def interpolate_all_data(
             method=method,
             smooth_factor=smooth,
             unfiltered_zones=zones_for_key,
-            savgol_window=savgol_params["window"],
-            savgol_polyorder=savgol_params["polyorder"],
+            trend_lambda=trend_lambda
         )
 
-        # Sanitization pour les débits
         if key.startswith("Q_"):
-            interp, _ = sanitize_flow(interp, flow_eps)
+            interp, n_replaced = sanitize_flow(interp, flow_eps)
+            if n_replaced > 0:
+                print(f"{key}: {n_replaced} valeurs nulles remplacées par {flow_eps}")
 
-        # Renommer la clé selon les noms d'inlet
         new_key = key
         for old_name, new_name in inlet_names.items():
             new_key = new_key.replace(old_name, new_name)
