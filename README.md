@@ -133,6 +133,30 @@ Les paramètres par défaut peuvent être modifiés dans `src/core/constants.py`
 - `DEFAULT_SMOOTH_Q` : Facteur de lissage pour les débits
 - `DEFAULT_SMOOTH_T` : Facteur de lissage pour les températures
 
+## ❓ Dépannage
+
+### `ImportError: attempted relative import`
+
+Lancez l'application depuis la racine avec `python launch.py` ou `run.bat` / `./run.sh`.
+Ne pas lancer `python src/main.py` depuis la racine.
+
+### `ModuleNotFoundError: No module named 'numpy'`
+
+```bash
+pip install -r requirements.txt
+```
+
+### tkinter non disponible (Linux)
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install python3-tk
+# Fedora
+sudo dnf install python3-tkinter
+# macOS (Homebrew)
+brew install python-tk
+```
+
 ## 📝 Licence
 
 MIT License
