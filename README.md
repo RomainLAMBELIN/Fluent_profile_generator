@@ -45,13 +45,7 @@ run.bat
 python launch.py
 ```
 
-**Méthode 3 - Depuis le répertoire src** :
-```bash
-cd src
-python main.py
-```
-
-**Méthode 4 - Make** :
+**Méthode 3 - Make** :
 ```bash
 make run
 ```
@@ -95,8 +89,8 @@ pytest tests/test_io.py -v
 
 ```
 fluent-prof-generator/
+├── launch.py                    # Point d'entrée de l'application
 ├── src/
-│   ├── main.py                 # Point d'entrée de l'application
 │   ├── core/
 │   │   ├── __init__.py
 │   │   ├── io.py              # Lecture/écriture de fichiers
@@ -138,7 +132,6 @@ Les paramètres par défaut peuvent être modifiés dans `src/core/constants.py`
 ### `ImportError: attempted relative import`
 
 Lancez l'application depuis la racine avec `python launch.py` ou `run.bat` / `./run.sh`.
-Ne pas lancer `python src/main.py` depuis la racine.
 
 ### `ModuleNotFoundError: No module named 'numpy'`
 

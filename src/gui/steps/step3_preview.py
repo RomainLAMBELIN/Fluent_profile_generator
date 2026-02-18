@@ -7,7 +7,7 @@ from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from core.constants import FILE_KEYS
+from core.constants import FILE_KEYS, INTERP_METHODS
 
 
 class Step3Preview(ttk.Frame):
@@ -113,7 +113,6 @@ class Step3Preview(ttk.Frame):
                 method_key = methods.get(key, "spline")
                 
                 # Label selon la méthode
-                from core.constants import INTERP_METHODS
                 if method_key in INTERP_METHODS:
                     method_label = INTERP_METHODS[method_key]
                 else:

@@ -31,7 +31,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "fluent-prof-generator=main:main",
+            "fluent-prof-generator=gui.app:run",
         ],
     },
 )

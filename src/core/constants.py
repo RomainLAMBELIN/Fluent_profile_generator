@@ -13,14 +13,23 @@ INTERP_METHODS = {
     "pchip": "PCHIP (monotone, exacte)",
     "spline": "Spline lissée (contrôle du lissage)",
     "linear": "Linéaire (segments droits)",
+    "akima": "Akima (cubique locale, peu d'oscillations)",
+    "makima": "Makima (Akima modifié, robuste aux aberrations)",
+    "savgol": "Savitzky-Golay (filtre polynomial)",
 }
 DEFAULT_INTERP_METHOD = "pchip"
+
+# Méthodes nécessitant un paramètre de lissage
+METHODS_WITH_SMOOTHING = {"spline", "savgol"}
 
 # Descriptions détaillées des méthodes
 INTERP_METHODS_HELP = {
     "pchip": "Interpolation exacte préservant la monotonie. Idéal pour données propres.",
     "spline": "Spline cubique avec lissage ajustable. Le plus flexible.",
     "linear": "Segments de droites entre chaque point. Simple et rapide.",
+    "akima": "Interpolation cubique locale minimisant les oscillations. Idéal pour changements brusques.",
+    "makima": "Akima modifié, plus robuste aux valeurs aberrantes et pics isolés.",
+    "savgol": "Filtre polynomial par fenêtre glissante. Excellent pour bruit haute fréquence.",
 }
 
 # Noms par défaut des inlets
@@ -31,10 +40,9 @@ MIN_POINTS_REQUIRED = 4  # Nombre minimum de points pour l'interpolation
 SPLINE_DEGREE = 3  # Degré de la spline cubique
 
 # Transitions entre segments
-DEFAULT_TRANSITION_RATIO = 0.02  # 2% de transition par défaut
 TRANSITION_MIN = 0.0
 TRANSITION_MAX = 0.10  # Maximum 10%
-DEFAULT_TRANSITION_RATIO = 0.05  # Ratio de transition par défaut (5%)
+DEFAULT_TRANSITION_RATIO = 0.02  # Ratio de transition par défaut (2%)
 
 # Paramètres Savitzky-Golay
 DEFAULT_SAVGOL_WINDOW = 11  # Taille de fenêtre (impair)

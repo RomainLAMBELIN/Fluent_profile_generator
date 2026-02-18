@@ -162,19 +162,19 @@ def export_prof(filename: str, times: np.ndarray, data_dict: Dict[str, np.ndarra
     # Format attendu: Q_inlet1, T_inlet1, Q_inlet2, T_inlet2, ...
     col_names = sorted(data_dict.keys(), key=lambda k: (k.split('_')[-1], k[0]))
     
+    # Construire la matrice de données pour écriture vectorisée
+    matrix = np.column_stack([times] + [data_dict[c] for c in col_names])
+
     with open(filename, "w") as f:
         # Ligne 1: profile N_cols N_points 0
         f.write(f"profile {n_cols} {n_points} 0\n")
-        
+
         # Ligne 2: noms des colonnes
         f.write("time " + " ".join(col_names) + "\n")
-        
-        # Données ligne par ligne
-        for i in range(n_points):
-            row = [f"{times[i]:.10f}"]
-            for col_name in col_names:
-                row.append(f"{data_dict[col_name][i]:.6f}")
-            f.write(" ".join(row) + "\n")
+
+        # Écriture vectorisée avec np.savetxt
+        fmt = ["%.10f"] + ["%.6f"] * len(col_names)
+        np.savetxt(f, matrix, fmt=fmt, delimiter=" ")
 
 
 def load_all_files(file_paths: Dict[str, str]) -> Dict[str, pd.DataFrame]:

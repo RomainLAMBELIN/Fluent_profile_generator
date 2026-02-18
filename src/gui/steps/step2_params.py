@@ -12,12 +12,17 @@ from core.constants import (
     DEFAULT_DT_US, DEFAULT_FLOW_EPS, DEFAULT_SMOOTH_Q, DEFAULT_SMOOTH_T,
     SMOOTH_MIN, SMOOTH_MAX, MAX_PREVIEW_POINTS, FILE_KEYS,
     INTERP_METHODS, DEFAULT_INTERP_METHOD, INTERP_METHODS_HELP,
+    METHODS_WITH_SMOOTHING,
     DEFAULT_SAVGOL_WINDOW, DEFAULT_SAVGOL_POLYORDER, DEFAULT_TRANSITION_RATIO,
     TRANSITION_MIN, TRANSITION_MAX
 )
 from core.interpolation import interpolate, generate_time_array
+from core.config import ConfigManager
 from core.analysis import compute_interpolation_error, format_error_text
 from gui.unfiltered_zones_dialog import UnfilteredZonesDialog
+
+# Lookup inversé : affichage → clé de méthode
+_METHOD_DISPLAY_TO_KEY = {v: k for k, v in INTERP_METHODS.items()}
 
 
 class Step2Parameters(ttk.Frame):
@@ -55,11 +60,10 @@ class Step2Parameters(ttk.Frame):
         """Initialise les paramètres dans l'état."""
         if "params" not in self.app_state:
             self.app_state["params"] = {}
-        
+
         params = self.app_state["params"]
-        
+
         # Charger les derniers paramètres sauvegardés (si disponibles)
-        from core.config import ConfigManager
         config_mgr = ConfigManager()
         last_params = config_mgr.get_last_step2_params()
         
@@ -138,10 +142,11 @@ class Step2Parameters(ttk.Frame):
         scroll_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Bind mouse wheel
+        # Bind mouse wheel uniquement sur le panneau de paramètres
         def _on_mousewheel(event):
             scroll_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        scroll_canvas.bind("<MouseWheel>", _on_mousewheel)
+        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
         
         # Paramètres globaux
         global_params = ttk.LabelFrame(scrollable_frame, text="Paramètres globaux", padding=10)
@@ -320,19 +325,17 @@ class Step2Parameters(ttk.Frame):
     
     def _on_method_change(self, key):
         """Callback quand la méthode change pour une courbe."""
-        # Récupérer la clé de méthode depuis la valeur affichée
         method_display = self.method_vars[key].get()
-        method_key = [k for k, v in INTERP_METHODS.items() if v == method_display][0]
-        
-        # Sauvegarder
+        method_key = _METHOD_DISPLAY_TO_KEY.get(method_display, DEFAULT_INTERP_METHOD)
+
         self.app_state["params"]["methods"][key] = method_key
-        
+
         # Activer/désactiver le lissage selon la méthode
-        if method_key in ["pchip", "linear"]:
-            self.smooth_scales[key].config(state="disabled")
-        else:
+        if method_key in METHODS_WITH_SMOOTHING:
             self.smooth_scales[key].config(state="normal")
-        
+        else:
+            self.smooth_scales[key].config(state="disabled")
+
         self._update_preview()
     
     def _on_smooth_change(self, key):
@@ -374,16 +377,7 @@ class Step2Parameters(ttk.Frame):
         # Récupérer les données et paramètres pour la prévisualisation
         df = self.app_state.get("data_raw", {}).get(key, None)
         method_display = self.method_vars[key].get()
-        
-        # Trouver la clé de méthode
-        method = None
-        from core.constants import INTERP_METHODS
-        for k, v in INTERP_METHODS.items():
-            if v == method_display:
-                method = k
-                break
-        if method is None:
-            method = "pchip"
+        method = _METHOD_DISPLAY_TO_KEY.get(method_display, "pchip")
         
         smooth = self.smooth_vars[key].get()
         
@@ -460,18 +454,7 @@ class Step2Parameters(ttk.Frame):
             for key, df in data_raw.items():
                 method_display = self.method_vars[key].get()
                 
-                # Trouver la clé de méthode depuis l'affichage
-                method = None
-                for k, v in INTERP_METHODS.items():
-                    if v == method_display:
-                        method = k
-                        break
-                
-                # Si méthode non trouvée, utiliser PCHIP par défaut
-                if method is None:
-                    method = "pchip"
-                    # Mettre à jour la variable
-                    self.method_vars[key].set(INTERP_METHODS["pchip"])
+                method = _METHOD_DISPLAY_TO_KEY.get(method_display, "pchip")
                 
                 smooth = self.smooth_vars[key].get()
                 zones = self.app_state["params"]["unfiltered_zones"].get(key, [])
