@@ -56,6 +56,7 @@ class Step2Parameters(ttk.Frame):
         self.lambda_entries = {}
         self.lambda_frames = {}
         self.zones_labels = {}
+        self.invert_vars = {}
 
         for key in self.file_keys:
             method_key = self.app_state["params"]["methods"][key]
@@ -63,6 +64,7 @@ class Step2Parameters(ttk.Frame):
             self.method_vars[key] = tk.StringVar(value=method_display)
             self.smooth_vars[key] = tk.DoubleVar(value=self.app_state["params"]["smooth_params"][key])
             self.lambda_vars[key] = tk.DoubleVar(value=self.app_state["params"]["trend_lambda"][key])
+            self.invert_vars[key] = tk.BooleanVar(value=self.app_state["params"]["inverted"].get(key, False))
 
         self._build_ui()
         self._update_zones_labels()
@@ -121,6 +123,14 @@ class Step2Parameters(ttk.Frame):
                     params["trend_lambda"][key] = saved_lambda[key]
                 else:
                     params["trend_lambda"][key] = DEFAULT_TREND_LAMBDA
+
+        # Inversion des courbes (par courbe)
+        if "inverted" not in params:
+            params["inverted"] = {}
+        saved_inverted = last_params.get("inverted", {})
+        for key in self.file_keys:
+            if key not in params["inverted"]:
+                params["inverted"][key] = saved_inverted.get(key, False)
 
     def _build_ui(self):
         """Construction de l'interface."""
@@ -326,6 +336,15 @@ class Step2Parameters(ttk.Frame):
         # Afficher/cacher selon la méthode initiale
         self._update_param_visibility(key)
 
+        # Inversion
+        invert_row = ttk.Frame(frame)
+        invert_row.pack(fill="x", pady=2)
+        ttk.Checkbutton(
+            invert_row, text="Inverser la courbe (×-1)",
+            variable=self.invert_vars[key],
+            command=lambda k=key: self._on_invert_change(k),
+        ).pack(side="left")
+
         # Zones
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=2)
@@ -403,6 +422,11 @@ class Step2Parameters(ttk.Frame):
         entry.delete(0, "end")
         entry.insert(0, f"{value:.2f}")
         self._on_lambda_change(key)
+
+    def _on_invert_change(self, key):
+        """Callback quand l'inversion change pour une courbe."""
+        self.app_state["params"]["inverted"][key] = self.invert_vars[key].get()
+        self._update_preview()
 
     def _show_help_dialog(self):
         """Affiche la fenêtre d'aide sur les méthodes d'interpolation."""
@@ -565,16 +589,21 @@ Recommandations :
                         trend_lambda=trend_lambda,
                     )
 
+                    # Appliquer l'inversion si activée
+                    is_inverted = self.invert_vars.get(key, tk.BooleanVar(value=False)).get()
+                    invert_coeff = -1.0 if is_inverted else 1.0
+
                     fig = self.preview_figs[key]
                     fig.clear()
                     ax = fig.add_subplot(111)
 
+                    raw_values = df["Value"].values * invert_coeff
                     ax.plot(
-                        df["Time_s"], df["Value"], "-", color="black",
+                        df["Time_s"], raw_values, "-", color="black",
                         label="Linéaire", linewidth=0.8, alpha=0.3, zorder=1,
                     )
                     ax.plot(
-                        df["Time_s"], df["Value"], "o", label="Brut",
+                        df["Time_s"], raw_values, "o", label="Brut",
                         markersize=3, alpha=0.8, zorder=3, color="C0",
                     )
 
@@ -584,7 +613,7 @@ Recommandations :
                     elif method in ["trend_l2", "trend_l1"]:
                         label += f" (λ={trend_lambda:.2f})"
                     ax.plot(
-                        times_preview, interp, "-", label=label,
+                        times_preview, interp * invert_coeff, "-", label=label,
                         linewidth=2.5, zorder=2, color="C1",
                     )
 

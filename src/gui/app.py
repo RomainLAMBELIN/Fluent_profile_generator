@@ -269,6 +269,7 @@ class FluentProfGenerator(tk.Tk):
             params.get("unfiltered_zones", {}),
             inlet_names_map,
             params.get("trend_lambda", {}),
+            params.get("inverted", {}),
         )
 
         self.app_state["times"] = times
