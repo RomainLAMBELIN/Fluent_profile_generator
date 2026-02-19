@@ -186,7 +186,8 @@ class Step1Files(ttk.Frame):
 
         n_pairs = max(len(q_cols), len(t_cols))
         if n_pairs == 0:
-            # Pas de détection : créer un inlet vide
+            # Pas de détection : créer 2 inlets vides par défaut
+            self._add_inlet_row()
             self._add_inlet_row()
         else:
             for i in range(n_pairs):

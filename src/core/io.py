@@ -291,6 +291,11 @@ def extract_inlet_data(
     # Conversion ms → s
     time_s = time_values / 1000.0
 
+    # Shift temporel : le premier instant doit être 0
+    t_min = time_s.dropna().min()
+    if t_min != 0.0:
+        time_s = time_s - t_min
+
     for q_col, t_col, inlet_idx in column_mapping:
         # --- Débit ---
         q_key = f"Q_inlet{inlet_idx}"

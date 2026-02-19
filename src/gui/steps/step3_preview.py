@@ -109,11 +109,15 @@ class Step3Preview(ttk.Frame):
                 ax = fig.add_subplot(n_rows, n_cols, subplot_idx)
 
                 # Points bruts - linéaire de référence
+                is_inverted = params.get("inverted", {}).get(key, False)
+                invert_coeff = -1.0 if is_inverted else 1.0
+
                 if key in data_raw:
                     df = data_raw[key]
+                    raw_values = df["Value"].values * invert_coeff
                     ax.plot(
                         df["Time_s"],
-                        df["Value"],
+                        raw_values,
                         "-",
                         color="black",
                         label="Linéaire",
@@ -123,7 +127,7 @@ class Step3Preview(ttk.Frame):
                     )
                     ax.plot(
                         df["Time_s"],
-                        df["Value"],
+                        raw_values,
                         "o",
                         label="Brut",
                         markersize=3,

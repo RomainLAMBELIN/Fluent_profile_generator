@@ -719,7 +719,8 @@ def interpolate_all_data(
     flow_eps: float = DEFAULT_FLOW_EPS,
     unfiltered_zones: dict = None,
     inlet_names: dict = None,
-    trend_lambda_params: dict = None
+    trend_lambda_params: dict = None,
+    inverted: dict = None
 ) -> dict:
     """
     Interpole toutes les données avec les paramètres spécifiés par courbe.
@@ -733,6 +734,7 @@ def interpolate_all_data(
         unfiltered_zones: Dict {key: [(t_start, t_end), ...]}
         inlet_names: Dictionnaire {"inlet1": "nom1", ...}
         trend_lambda_params: Dict {key: lambda_value}
+        inverted: Dict {key: bool} - courbes à inverser (coefficient ×-1)
 
     Returns:
         Dictionnaire {clé_renommée: array_interpolé}
@@ -745,6 +747,8 @@ def interpolate_all_data(
         unfiltered_zones = {}
     if trend_lambda_params is None:
         trend_lambda_params = {}
+    if inverted is None:
+        inverted = {}
 
     for key, df in data_raw.items():
         method = methods.get(key, "spline")
@@ -760,6 +764,10 @@ def interpolate_all_data(
             unfiltered_zones=zones_for_key,
             trend_lambda=trend_lambda
         )
+
+        # Appliquer l'inversion si activée
+        if inverted.get(key, False):
+            interp = interp * -1.0
 
         if key.startswith("Q_"):
             interp, n_replaced = sanitize_flow(interp, flow_eps)
