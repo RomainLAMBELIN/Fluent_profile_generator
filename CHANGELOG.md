@@ -5,6 +5,30 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
+## [2.12.0]
+
+### Ajouté
+- Option « Inverser la courbe (×-1) » par courbe à l'étape 2 (appliquée à la prévisualisation et à l'export, y compris au remplacement des débits nuls)
+- Décalage automatique de l'axe temporel : le premier instant mesuré devient 0 ms
+- Deux inlets créés par défaut quand l'auto-détection des colonnes ne trouve rien
+- Nouveau dialogue de zones : liste des zones, sélection par cliquer-glisser sur le graphique, saisie des bornes, prévisualisation temps réel (sans zone / avec zones / zone en édition), bornes ajustées aux points de mesure
+- Suite de tests `tests/` (toutes les combinaisons méthode × zones, continuité, extrapolation, grille non uniforme, inversion, décalage temporel)
+
+### Corrigé
+- Sauts de valeur aux frontières des zones avec Spline et Trend Filter : les segments sont désormais raccordés en valeur (continuité C0) et partagent leurs points frontière
+- Trend Filter L1/L2 : les différences finies tiennent compte de l'espacement réel des temps (plus de pente aberrante entre deux mesures rapprochées, ex. 84.9 ms et 85.0 ms)
+- Extrapolation polynomiale au-delà des données (PCHIP/Spline divergeaient) : prolongement constant
+- Zones plus fines que le pas de mesure, chevauchantes ou hors plage : gestion explicite (élargies à 2 points, tronquées ou ignorées)
+- Prévisualisation du dialogue de zones qui ne fonctionnait plus (arguments obsolètes passés à `interpolate()`), et lambda du Trend Filter non pris en compte dans cette prévisualisation
+- Pas de temps du profil exporté désormais exactement égal à dt (`np.arange` au lieu de `linspace` avec arrondi)
+- Bandeau d'informations de l'étape 2 non rafraîchi après modification des zones
+- Panneau de paramètres de l'étape 2 tronqué à droite
+
+### Modifié
+- Trend Filter : résolution par matrices creuses (mémoire et temps réduits sur grandes séries)
+- Évaluation des segments vectorisée (plus de boucle Python point par point)
+- Suppression de `zone_editor_dialog.py` (fusionné dans `unfiltered_zones_dialog.py`)
+
 ## [2.11.0]
 
 ### Ajouté

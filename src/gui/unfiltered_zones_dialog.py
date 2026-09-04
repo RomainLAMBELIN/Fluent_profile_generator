@@ -1,335 +1,511 @@
 """
-Dialogue pour configurer les zones non-filtrées
+Dialogue de configuration des zones spéciales avec prévisualisation interactive.
+
+Une zone force localement l'interpolation :
+- "exact"  : PCHIP passant par tous les points de mesure de la zone
+- "linear" : droite entre les deux bornes (points intermédiaires ignorés)
+
+Les bornes sont ajustées aux points de mesure les plus proches. La plage peut
+être sélectionnée par cliquer-glisser sur le graphique ou saisie au clavier.
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from gui.zone_editor_dialog import ZoneEditorDialog
+import numpy as np
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.figure import Figure
+from matplotlib.widgets import SpanSelector
+
+from core.interpolation import interpolate, zones_to_index_ranges, prepare_xy
+from core.analysis import compute_interpolation_error, format_error_text
+from core.constants import INTERP_METHODS
+
+ZONE_TYPE_LABELS = {"exact": "Exacte", "linear": "Linéaire"}
+ZONE_COLORS = {"exact": "tab:green", "linear": "tab:purple"}
+PENDING_COLOR = "tab:red"
 
 
 class UnfilteredZonesDialog(tk.Toplevel):
-    """Dialogue pour définir les zones non-filtrées."""
-    
-    def __init__(self, parent, sim_duration, initial_zones=None, title="Zones non-filtrées",
-                 df=None, current_method="pchip", current_smooth=0.0):
+    """Dialogue de définition des zones spéciales d'une courbe."""
+
+    def __init__(self, parent, sim_duration, initial_zones=None, title="Zones spéciales",
+                 df=None, current_method="pchip", current_smooth=0.0,
+                 trend_lambda=1.0, inverted=False):
         super().__init__(parent)
+        if df is None or len(df) < 2:
+            raise ValueError("Données de courbe requises pour configurer les zones.")
+
         self.title(title)
-        self.geometry("600x450")
-        self.resizable(True, True)
-        
-        self.sim_duration = sim_duration
-        self.zones = initial_zones.copy() if initial_zones else []
-        self.result = None
-        
-        # Pour la prévisualisation
+        self.geometry("1150x700")
+        self.minsize(950, 600)
+
         self.df = df
-        self.current_method = current_method
-        self.current_smooth = current_smooth
-        
+        self.x, self.y = prepare_xy(df)
+        self.sim_duration = sim_duration
+        self.method = current_method
+        self.smooth = current_smooth
+        self.trend_lambda = trend_lambda
+        self.sign = -1.0 if inverted else 1.0
+
+        # Zones validées : liste de (t_start, t_end, type), bornes ajustées
+        self.zones = self._snap_zones(initial_zones)
+        self.result = None
+        self.selected_idx = None
+        self.pending = None  # (i_start, i_end) de la zone en cours d'édition
+        self.zone_type_var = tk.StringVar(value="exact")
+        self._span = None
+
         self._build_ui()
-        
-        # Modal
+        self._refresh_table()
+        self._update_preview()
+
         self.transient(parent)
         self.grab_set()
-        
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.bind("<Escape>", lambda e: self._on_cancel())
+
+    # ------------------------------------------------------------------
+    # Utilitaires
+    # ------------------------------------------------------------------
+
+    def _snap_index(self, t):
+        return int(np.argmin(np.abs(self.x - float(t))))
+
+    def _zone_indices(self, zone):
+        return self._snap_index(zone[0]), self._snap_index(zone[1])
+
+    def _snap_zones(self, zones):
+        ranges = zones_to_index_ranges(self.x, zones)
+        return [(float(self.x[i0]), float(self.x[i1]), zt) for i0, i1, zt in ranges]
+
+    def _set_entries(self, t0, t1):
+        self.entry_start.delete(0, "end")
+        self.entry_start.insert(0, f"{t0:.6f}")
+        self.entry_end.delete(0, "end")
+        self.entry_end.insert(0, f"{t1:.6f}")
+
+    def _interp(self, t, zones):
+        return interpolate(
+            self.df, t, method=self.method, smooth_factor=self.smooth,
+            unfiltered_zones=zones, trend_lambda=self.trend_lambda,
+        )
+
+    # ------------------------------------------------------------------
+    # Interface
+    # ------------------------------------------------------------------
+
     def _build_ui(self):
-        """Construction de l'interface."""
-        main = ttk.Frame(self, padding=15)
+        main = ttk.Frame(self, padding=10)
         main.pack(fill="both", expand=True)
-        main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, weight=1)
         main.rowconfigure(1, weight=1)
-        
-        # Instructions
-        ttk.Label(
-            main,
-            text=f"Définissez les plages de temps où l'interpolation doit être EXACTE (sans lissage)\n"
-                 f"Durée de simulation : 0.0 à {self.sim_duration:.6f} s",
-            font=("Segoe UI", 10)
-        ).grid(row=0, column=0, sticky="w", pady=(0, 15))
-        
-        # Liste des zones
-        list_frame = ttk.LabelFrame(main, text="Zones définies", padding=10)
-        list_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+
+        method_label = INTERP_METHODS.get(self.method, self.method)
+        info = (
+            "Cliquez-glissez sur le graphique pour sélectionner une plage, ou saisissez les bornes. "
+            "Les bornes sont ajustées aux points de mesure les plus proches. "
+            f"Méthode globale : {method_label}. "
+            f"Données : {self.x[0]:.6f} → {self.x[-1]:.6f} s ({len(self.x)} points)."
+        )
+        ttk.Label(main, text=info, wraplength=1100, justify="left").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+
+        # ---- Panneau gauche ----
+        left = ttk.Frame(main)
+        left.grid(row=1, column=0, sticky="ns", padx=(0, 10))
+        left.rowconfigure(0, weight=1)
+
+        list_frame = ttk.LabelFrame(left, text="Zones définies", padding=8)
+        list_frame.grid(row=0, column=0, sticky="nsew")
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
-        
-        # Listbox avec scrollbar
-        scroll_frame = ttk.Frame(list_frame)
-        scroll_frame.grid(row=0, column=0, sticky="nsew")
-        scroll_frame.columnconfigure(0, weight=1)
-        scroll_frame.rowconfigure(0, weight=1)
-        
-        self.listbox = tk.Listbox(scroll_frame, height=8)
-        scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscrollcommand=scrollbar.set)
-        
-        self.listbox.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        
-        # Boutons de gestion
-        btn_frame = ttk.Frame(list_frame)
-        btn_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        
-        ttk.Button(btn_frame, text="➕ Ajouter", command=self._add_zone).pack(side="left", padx=(0, 5))
-        ttk.Button(btn_frame, text="✏️ Modifier", command=self._edit_zone).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="🗑️ Supprimer", command=self._remove_zone).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Vider tout", command=self._clear_all).pack(side="left", padx=(5, 0))
-        
-        # Boutons OK/Annuler
-        bottom_frame = ttk.Frame(main)
-        bottom_frame.grid(row=2, column=0, sticky="ew")
-        
-        ttk.Button(bottom_frame, text="OK", command=self._on_ok, width=12).pack(side="right", padx=(5, 0))
-        ttk.Button(bottom_frame, text="Annuler", command=self._on_cancel, width=12).pack(side="right")
-        
-        # Remplir la liste
-        self._refresh_list()
-    
-    def _refresh_list(self):
-        """Rafraîchit la liste des zones."""
-        self.listbox.delete(0, "end")
-        for zone in sorted(self.zones, key=lambda z: z[0]):
-            if len(zone) == 3:
-                t_start, t_end, zone_type = zone
-                type_label = "Exacte" if zone_type == "exact" else "Linéaire"
-            else:
-                # Ancienne version (rétrocompatibilité)
-                t_start, t_end = zone
-                type_label = "Exacte"
-            self.listbox.insert("end", f"[{t_start:.6f} → {t_end:.6f}] {type_label}")
-    
-    def _add_zone(self):
-        """Ajoute une nouvelle zone."""
-        # Utiliser le nouveau dialogue avec prévisualisation si données disponibles
-        if self.df is not None:
-            dialog = ZoneEditorDialog(
-                self,
-                self.sim_duration,
-                self.df,
-                self.current_method,
-                self.current_smooth
-            )
-        else:
-            # Fallback sur l'ancien dialogue
-            dialog = ZoneInputDialog(self, self.sim_duration)
-        
-        self.wait_window(dialog)
-        
-        if dialog.result:
-            t_start, t_end, zone_type = dialog.result
-            # Vérifier les chevauchements
-            for zone in self.zones:
-                existing_start = zone[0]
-                existing_end = zone[1]
-                if not (t_end <= existing_start or t_start >= existing_end):
-                    messagebox.showwarning(
-                        "Chevauchement",
-                        f"Cette zone chevauche une zone existante:\n"
-                        f"[{existing_start:.6f} → {existing_end:.6f}]",
-                        parent=self
-                    )
-                    return
-            
-            self.zones.append((t_start, t_end, zone_type))
-            self._refresh_list()
-    
-    def _edit_zone(self):
-        """Modifie la zone sélectionnée."""
-        selection = self.listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Info", "Sélectionnez une zone à modifier.", parent=self)
-            return
-        
-        idx = selection[0]
-        zone = self.zones[idx]
-        
-        if len(zone) == 3:
-            t_start, t_end, zone_type = zone
-        else:
-            t_start, t_end = zone
-            zone_type = "exact"
-        
-        # Utiliser le nouveau dialogue avec prévisualisation si données disponibles
-        if self.df is not None:
-            dialog = ZoneEditorDialog(
-                self,
-                self.sim_duration,
-                self.df,
-                self.current_method,
-                self.current_smooth,
-                t_start,
-                t_end,
-                zone_type
-            )
-        else:
-            # Fallback sur l'ancien dialogue
-            dialog = ZoneInputDialog(self, self.sim_duration, t_start, t_end, zone_type)
-        
-        self.wait_window(dialog)
-        
-        if dialog.result:
-            new_start, new_end, new_type = dialog.result
-            # Vérifier les chevauchements (sauf avec soi-même)
-            for i, z in enumerate(self.zones):
-                if i == idx:
-                    continue
-                existing_start = z[0]
-                existing_end = z[1]
-                if not (new_end <= existing_start or new_start >= existing_end):
-                    messagebox.showwarning(
-                        "Chevauchement",
-                        f"Cette zone chevauche une zone existante:\n"
-                        f"[{existing_start:.6f} → {existing_end:.6f}]",
-                        parent=self
-                    )
-                    return
-            
-            self.zones[idx] = (new_start, new_end, new_type)
-            self._refresh_list()
-    
-    def _remove_zone(self):
-        """Supprime la zone sélectionnée."""
-        selection = self.listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Info", "Sélectionnez une zone à supprimer.", parent=self)
-            return
-        
-        idx = selection[0]
-        self.zones.pop(idx)
-        self._refresh_list()
-    
-    def _clear_all(self):
-        """Vide toutes les zones."""
-        if self.zones and messagebox.askyesno(
-            "Confirmer",
-            "Supprimer toutes les zones ?",
-            parent=self
-        ):
-            self.zones = []
-            self._refresh_list()
-    
-    def _on_ok(self):
-        """Valide et ferme."""
-        self.result = self.zones
-        self.destroy()
-    
-    def _on_cancel(self):
-        """Annule et ferme."""
-        self.result = None
-        self.destroy()
 
-
-class ZoneInputDialog(tk.Toplevel):
-    """Dialogue pour saisir une zone."""
-    
-    def __init__(self, parent, sim_duration, t_start=None, t_end=None, zone_type="exact"):
-        super().__init__(parent)
-        self.title("Définir une zone")
-        self.geometry("520x360")
-        self.resizable(False, False)
-        
-        self.sim_duration = sim_duration
-        self.result = None
-        
-        main = ttk.Frame(self, padding=20)
-        main.pack(fill="both", expand=True)
-        
-        ttk.Label(main, text=f"Plage de temps (0.0 à {sim_duration:.6f} s)").pack(anchor="w", pady=(0, 15))
-        
-        # Début
-        row1 = ttk.Frame(main)
-        row1.pack(fill="x", pady=5)
-        ttk.Label(row1, text="Début (s) :", width=12).pack(side="left")
-        self.entry_start = ttk.Entry(row1)
-        self.entry_start.pack(side="left", fill="x", expand=True, padx=(10, 0))
-        if t_start is not None:
-            self.entry_start.insert(0, f"{t_start:.6f}")
-        
-        # Fin
-        row2 = ttk.Frame(main)
-        row2.pack(fill="x", pady=5)
-        ttk.Label(row2, text="Fin (s) :", width=12).pack(side="left")
-        self.entry_end = ttk.Entry(row2)
-        self.entry_end.pack(side="left", fill="x", expand=True, padx=(10, 0))
-        if t_end is not None:
-            self.entry_end.insert(0, f"{t_end:.6f}")
-        
-        # Type de zone
-        ttk.Separator(main, orient="horizontal").pack(fill="x", pady=15)
-        ttk.Label(main, text="Type d'interpolation dans la zone :").pack(anchor="w", pady=(0, 5))
-        
-        self.zone_type = tk.StringVar(value=zone_type)
-        
-        row3 = ttk.Frame(main)
-        row3.pack(fill="x", pady=2)
-        ttk.Radiobutton(
-            row3,
-            text="Exacte (PCHIP - passe par tous les points)",
-            variable=self.zone_type,
-            value="exact"
-        ).pack(anchor="w")
-        
-        row4 = ttk.Frame(main)
-        row4.pack(fill="x", pady=2)
-        ttk.Radiobutton(
-            row4,
-            text="Linéaire (droite entre les 2 points de borne - ignore les points intermédiaires)",
-            variable=self.zone_type,
-            value="linear"
-        ).pack(anchor="w")
-        
-        # Note explicative
-        note = ttk.Label(
-            main,
-            text="Note : Type 'Linéaire' trace une droite entre le premier et dernier point\n"
-                 "de la zone, sautant ainsi tous les points intermédiaires problématiques.",
-            font=("Segoe UI", 8),
-            foreground="gray",
-            wraplength=460
+        cols = ("num", "start", "end", "type", "pts")
+        self.tree = ttk.Treeview(
+            list_frame, columns=cols, show="headings", height=8, selectmode="browse"
         )
-        note.pack(anchor="w", pady=(5, 0))
-        
-        # Boutons
-        btn_frame = ttk.Frame(main)
-        btn_frame.pack(fill="x", pady=(20, 0))
-        
-        btn_cancel = ttk.Button(btn_frame, text="Annuler", command=self.destroy, width=12)
-        btn_cancel.pack(side="right")
-        
-        btn_ok = ttk.Button(btn_frame, text="OK", command=self._on_ok, width=12)
-        btn_ok.pack(side="right", padx=(5, 5))
-        
-        # Modal
-        self.transient(parent)
-        self.grab_set()
-        
-        # Centrer la fenêtre
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{x}+{y}")
-        
-        # Bind Entrée pour valider
-        self.bind("<Return>", lambda e: self._on_ok())
-        self.bind("<Escape>", lambda e: self.destroy())
-        
-        self.entry_start.focus()
-    
-    def _on_ok(self):
-        """Valide la saisie."""
+        for col, text, width, anchor in (
+            ("num", "#", 30, "center"),
+            ("start", "Début (s)", 90, "e"),
+            ("end", "Fin (s)", 90, "e"),
+            ("type", "Type", 70, "w"),
+            ("pts", "Points", 55, "center"),
+        ):
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=width, anchor=anchor, stretch=False)
+        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+
+        btns = ttk.Frame(list_frame)
+        btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.btn_delete = ttk.Button(
+            btns, text="Supprimer", command=self._delete_selected, state="disabled"
+        )
+        self.btn_delete.pack(side="left")
+        ttk.Button(btns, text="Tout supprimer", command=self._clear_all).pack(
+            side="left", padx=(5, 0)
+        )
+
+        edit_frame = ttk.LabelFrame(left, text="Zone en cours d'édition", padding=8)
+        edit_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        edit_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(edit_frame, text="Début (s) :").grid(row=0, column=0, sticky="w", pady=2)
+        self.entry_start = ttk.Entry(edit_frame, width=14)
+        self.entry_start.grid(row=0, column=1, sticky="w", pady=2)
+        ttk.Label(edit_frame, text="Fin (s) :").grid(row=1, column=0, sticky="w", pady=2)
+        self.entry_end = ttk.Entry(edit_frame, width=14)
+        self.entry_end.grid(row=1, column=1, sticky="w", pady=2)
+        for entry in (self.entry_start, self.entry_end):
+            entry.bind("<Return>", lambda ev: self._on_entry_change())
+            entry.bind("<FocusOut>", lambda ev: self._on_entry_change())
+
+        ttk.Label(edit_frame, text="Type :").grid(row=2, column=0, sticky="nw", pady=(6, 2))
+        type_frame = ttk.Frame(edit_frame)
+        type_frame.grid(row=2, column=1, sticky="w", pady=(6, 2))
+        ttk.Radiobutton(
+            type_frame, text="Exacte (PCHIP par tous les points)",
+            variable=self.zone_type_var, value="exact", command=self._update_preview,
+        ).pack(anchor="w")
+        ttk.Radiobutton(
+            type_frame, text="Linéaire (droite entre les bornes)",
+            variable=self.zone_type_var, value="linear", command=self._update_preview,
+        ).pack(anchor="w")
+
+        self.lbl_edit_info = ttk.Label(
+            edit_frame, text="Aucune plage sélectionnée.", foreground="gray",
+            wraplength=300, justify="left",
+        )
+        self.lbl_edit_info.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 2))
+
+        action = ttk.Frame(edit_frame)
+        action.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.btn_add = ttk.Button(action, text="Ajouter", command=self._add_zone)
+        self.btn_add.pack(side="left")
+        self.btn_apply = ttk.Button(
+            action, text="Appliquer", command=self._apply_zone, state="disabled"
+        )
+        self.btn_apply.pack(side="left", padx=(5, 0))
+        ttk.Button(action, text="Nouvelle", command=self._new_zone).pack(
+            side="left", padx=(5, 0)
+        )
+
+        legend = (
+            "Vert : zone exacte · Violet : zone linéaire · Rouge hachuré : zone en édition.\n"
+            "Les zones ne peuvent pas se chevaucher (elles peuvent se toucher).\n"
+            "Le raccord avec le reste de la courbe est continu."
+        )
+        ttk.Label(
+            left, text=legend, foreground="gray", wraplength=330,
+            justify="left", font=("Segoe UI", 8),
+        ).grid(row=2, column=0, sticky="w", pady=(10, 0))
+
+        # ---- Panneau droit : graphique ----
+        right = ttk.LabelFrame(main, text="Prévisualisation", padding=5)
+        right.grid(row=1, column=1, sticky="nsew")
+        self.fig = Figure(figsize=(7, 4.5), dpi=100)
+        self.canvas = FigureCanvasTkAgg(self.fig, right)
+        toolbar = NavigationToolbar2Tk(self.canvas, right, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(side="bottom", fill="x")
+        self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
+
+        # ---- Bas ----
+        bottom = ttk.Frame(main)
+        bottom.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ttk.Button(bottom, text="OK", command=self._on_ok, width=12).pack(side="right", padx=(5, 0))
+        ttk.Button(bottom, text="Annuler", command=self._on_cancel, width=12).pack(side="right")
+        self.lbl_status = ttk.Label(bottom, text="", foreground="gray")
+        self.lbl_status.pack(side="left")
+
+    # ------------------------------------------------------------------
+    # Liste des zones
+    # ------------------------------------------------------------------
+
+    def _refresh_table(self):
+        self.tree.delete(*self.tree.get_children())
+        for i, zone in enumerate(self.zones):
+            t0, t1, zt = zone
+            i0, i1 = self._zone_indices(zone)
+            self.tree.insert(
+                "", "end", iid=str(i),
+                values=(i + 1, f"{t0:.6f}", f"{t1:.6f}",
+                        ZONE_TYPE_LABELS.get(zt, zt), i1 - i0 + 1),
+            )
+        if self.selected_idx is not None and 0 <= self.selected_idx < len(self.zones):
+            self.tree.selection_set(str(self.selected_idx))
+        else:
+            self.selected_idx = None
+        has_sel = self.selected_idx is not None
+        self.btn_delete.config(state="normal" if has_sel else "disabled")
+        self.btn_apply.config(state="normal" if has_sel else "disabled")
+        self.lbl_status.config(text=f"{len(self.zones)} zone(s) définie(s)")
+
+    def _on_tree_select(self, event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx >= len(self.zones):
+            return
+        self.selected_idx = idx
+        t0, t1, zt = self.zones[idx]
+        self._set_entries(t0, t1)
+        self.zone_type_var.set(zt)
+        self.pending = self._zone_indices(self.zones[idx])
+        self.btn_delete.config(state="normal")
+        self.btn_apply.config(state="normal")
+        self._update_edit_info()
+        self._update_preview()
+
+    def _delete_selected(self):
+        if self.selected_idx is None or self.selected_idx >= len(self.zones):
+            return
+        self.zones.pop(self.selected_idx)
+        self._new_zone()
+
+    def _clear_all(self):
+        if not self.zones:
+            return
+        if messagebox.askyesno("Confirmer", "Supprimer toutes les zones ?", parent=self):
+            self.zones = []
+            self._new_zone()
+
+    # ------------------------------------------------------------------
+    # Édition
+    # ------------------------------------------------------------------
+
+    def _new_zone(self):
+        """Désélectionne et vide la zone en cours d'édition."""
+        self.tree.selection_remove(self.tree.selection())
+        self.selected_idx = None
+        self.pending = None
+        self.entry_start.delete(0, "end")
+        self.entry_end.delete(0, "end")
+        self._refresh_table()
+        self._update_edit_info()
+        self._update_preview()
+
+    def _on_span_select(self, vmin, vmax):
+        """Sélection d'une plage par cliquer-glisser sur le graphique."""
+        if vmax - vmin <= 0:
+            return
+        i0 = self._snap_index(vmin)
+        i1 = self._snap_index(vmax)
+        if i1 <= i0:
+            i1 = min(i0 + 1, len(self.x) - 1)
+        if i1 <= i0:
+            return
+        self.pending = (i0, i1)
+        self._set_entries(self.x[i0], self.x[i1])
+        self._update_edit_info()
+        # Redessiner hors du callback du SpanSelector (qui est recréé au redraw)
+        self.after_idle(self._update_preview)
+
+    def _on_entry_change(self):
+        s0 = self.entry_start.get().strip().replace(",", ".")
+        s1 = self.entry_end.get().strip().replace(",", ".")
+        if not s0 and not s1:
+            return
         try:
-            t_start = float(self.entry_start.get())
-            t_end = float(self.entry_end.get())
-            
-            if t_start < 0 or t_end > self.sim_duration:
-                raise ValueError(f"Les temps doivent être entre 0 et {self.sim_duration:.6f}")
-            
-            if t_start >= t_end:
-                raise ValueError("Le début doit être strictement inférieur à la fin")
-            
-            self.result = (t_start, t_end, self.zone_type.get())
-            self.destroy()
-            
-        except ValueError as e:
-            messagebox.showerror("Erreur", str(e), parent=self)
+            t0 = float(s0)
+            t1 = float(s1)
+        except ValueError:
+            self.lbl_edit_info.config(text="Bornes invalides : saisir deux nombres.", foreground="red")
+            return
+        i0 = self._snap_index(t0)
+        i1 = self._snap_index(t1)
+        if i1 < i0:
+            i0, i1 = i1, i0
+        if i1 == i0:
+            i1 = min(i0 + 1, len(self.x) - 1)
+        if i1 <= i0:
+            self.lbl_edit_info.config(
+                text="La zone doit contenir au moins 2 points de mesure.", foreground="red"
+            )
+            return
+        if self.pending == (i0, i1):
+            return
+        self.pending = (i0, i1)
+        self._set_entries(self.x[i0], self.x[i1])
+        self._update_edit_info()
+        self._update_preview()
+
+    def _update_edit_info(self):
+        if self.pending is None:
+            self.lbl_edit_info.config(text="Aucune plage sélectionnée.", foreground="gray")
+            return
+        i0, i1 = self.pending
+        self.lbl_edit_info.config(
+            text=f"Plage ajustée : {self.x[i0]:.6f} → {self.x[i1]:.6f} s "
+                 f"({i1 - i0 + 1} points de mesure)",
+            foreground="gray",
+        )
+
+    def _validated_pending(self, skip_idx=None):
+        """Retourne (i0, i1) si la zone en édition est valide, sinon None (avec message)."""
+        if self.pending is None:
+            messagebox.showinfo(
+                "Zone",
+                "Définissez d'abord une plage : cliquez-glissez sur le graphique "
+                "ou saisissez les bornes.",
+                parent=self,
+            )
+            return None
+        i0, i1 = self.pending
+        for j, zone in enumerate(self.zones):
+            if j == skip_idx:
+                continue
+            j0, j1 = self._zone_indices(zone)
+            if i0 < j1 and i1 > j0:
+                messagebox.showwarning(
+                    "Chevauchement",
+                    f"La plage chevauche la zone {j + 1} "
+                    f"[{zone[0]:.6f} → {zone[1]:.6f}].",
+                    parent=self,
+                )
+                return None
+        return i0, i1
+
+    def _commit_zone(self, zone, replace_idx=None):
+        if replace_idx is not None:
+            self.zones[replace_idx] = zone
+        else:
+            self.zones.append(zone)
+        self.zones.sort(key=lambda z: z[0])
+        self.selected_idx = self.zones.index(zone)
+        self.pending = self._zone_indices(zone)
+        self._refresh_table()
+        self._update_edit_info()
+        self._update_preview()
+
+    def _add_zone(self):
+        v = self._validated_pending(skip_idx=None)
+        if v is None:
+            return
+        i0, i1 = v
+        self._commit_zone((float(self.x[i0]), float(self.x[i1]), self.zone_type_var.get()))
+
+    def _apply_zone(self):
+        if self.selected_idx is None or self.selected_idx >= len(self.zones):
+            return
+        v = self._validated_pending(skip_idx=self.selected_idx)
+        if v is None:
+            return
+        i0, i1 = v
+        self._commit_zone(
+            (float(self.x[i0]), float(self.x[i1]), self.zone_type_var.get()),
+            replace_idx=self.selected_idx,
+        )
+
+    # ------------------------------------------------------------------
+    # Prévisualisation
+    # ------------------------------------------------------------------
+
+    def _update_preview(self):
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        n = len(self.x)
+        t = np.linspace(self.x[0], self.x[-1], int(min(3000, max(300, 10 * n))))
+        s = self.sign
+        title_parts = []
+        errors = []
+
+        ax.plot(self.x, s * self.y, "o", markersize=3, color="C0", alpha=0.8,
+                label="Mesures", zorder=4)
+
+        try:
+            y_ref = self._interp(t, [])
+            ax.plot(t, s * y_ref, "-", color="black", linewidth=1.2, alpha=0.35,
+                    label="Sans zone", zorder=1)
+            title_parts.append(
+                "Sans zone : " + format_error_text(compute_interpolation_error(self.df, t, y_ref))
+            )
+        except Exception as e:
+            errors.append(f"référence : {e}")
+
+        if self.zones:
+            try:
+                y_z = self._interp(t, self.zones)
+                ax.plot(t, s * y_z, "-", color="C1", linewidth=2.2,
+                        label=f"Avec {len(self.zones)} zone(s)", zorder=2)
+                title_parts.append(
+                    "Avec zones : " + format_error_text(compute_interpolation_error(self.df, t, y_z))
+                )
+            except Exception as e:
+                errors.append(f"zones : {e}")
+
+        pending_zone = None
+        if self.pending is not None:
+            i0, i1 = self.pending
+            pending_zone = (float(self.x[i0]), float(self.x[i1]), self.zone_type_var.get())
+            preview_zones = [z for j, z in enumerate(self.zones) if j != self.selected_idx]
+            preview_zones.append(pending_zone)
+            try:
+                y_p = self._interp(t, preview_zones)
+                ax.plot(t, s * y_p, "--", color=PENDING_COLOR, linewidth=1.8,
+                        label="Aperçu avec la zone en édition", zorder=3)
+            except Exception as e:
+                errors.append(f"aperçu : {e}")
+
+        for j, (t0, t1, zt) in enumerate(self.zones):
+            color = ZONE_COLORS.get(zt, "gray")
+            is_selected = (j == self.selected_idx)
+            ax.axvspan(t0, t1, color=color, alpha=0.30 if is_selected else 0.12, linewidth=0)
+            ax.text((t0 + t1) / 2, 0.98, str(j + 1), transform=ax.get_xaxis_transform(),
+                    ha="center", va="top", fontsize=8, color=color)
+        if pending_zone is not None:
+            ax.axvspan(pending_zone[0], pending_zone[1], facecolor="none",
+                       edgecolor=PENDING_COLOR, hatch="//", alpha=0.5, linewidth=1.2)
+
+        ax.set_xlabel("Temps (s)")
+        ax.set_ylabel("Valeur")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8, loc="best")
+        if title_parts:
+            ax.set_title("\n".join(title_parts), fontsize=9)
+        if errors:
+            self.lbl_status.config(text="Erreur : " + " | ".join(errors), foreground="red")
+        else:
+            self.lbl_status.config(
+                text=f"{len(self.zones)} zone(s) définie(s)", foreground="gray"
+            )
+
+        self.fig.tight_layout()
+
+        if self._span is not None:
+            self._span.disconnect_events()
+        self._span = self._make_span_selector(ax)
+        self.canvas.draw_idle()
+
+    def _make_span_selector(self, ax):
+        """Crée le sélecteur de plage (compatible matplotlib >= 3.4)."""
+        style = dict(alpha=0.2, facecolor=PENDING_COLOR)
+        try:
+            return SpanSelector(
+                ax, self._on_span_select, "horizontal", useblit=False,
+                props=style, interactive=False,
+            )
+        except TypeError:
+            # matplotlib < 3.5 : ancien nom d'argument
+            return SpanSelector(
+                ax, self._on_span_select, "horizontal", useblit=False,
+                rectprops=style,
+            )
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def _on_ok(self):
+        self.result = sorted(self.zones, key=lambda z: z[0])
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
