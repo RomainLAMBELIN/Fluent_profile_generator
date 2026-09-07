@@ -13,6 +13,9 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 - Deux inlets créés par défaut quand l'auto-détection des colonnes ne trouve rien
 - Nouveau dialogue de zones : liste des zones, sélection par cliquer-glisser sur le graphique, saisie des bornes, prévisualisation temps réel (sans zone / avec zones / zone en édition), bornes ajustées aux points de mesure
 - Suite de tests `tests/` (toutes les combinaisons méthode × zones, continuité, extrapolation, grille non uniforme, inversion, décalage temporel)
+- Affichage des dérivées à l'étape 2, activable ou non : les pentes des courbes brute et traitée sont tracées sous la courbe, avec la pente maximale de chacune, l'instant où elle est atteinte, et le pourcentage de réduction obtenu
+- Repérage visuel de la pente maximale sur les deux panneaux (losange et trait pointillé), et bascule automatique en échelle logarithmique symétrique quand un pic isolé écrase le reste
+- Rappel de la réduction de pente dans les titres de l'étape 3, au moment de la vérification avant export
 
 ### Corrigé
 - Sauts de valeur aux frontières des zones avec Spline et Trend Filter : les segments sont désormais raccordés en valeur (continuité C0) et partagent leurs points frontière

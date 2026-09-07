@@ -18,7 +18,11 @@ from core.constants import (
 )
 from core.interpolation import interpolate, generate_time_array
 from core.config import ConfigManager
-from core.analysis import compute_interpolation_error, format_error_text
+from core.analysis import (
+    compute_interpolation_error, format_error_text,
+    slopes_between_samples, slopes_along_curve, max_slope,
+    slope_reduction_percent, format_slope_value,
+)
 from gui.unfiltered_zones_dialog import UnfilteredZonesDialog
 
 # Lookup inversé : affichage → clé de méthode
@@ -44,6 +48,9 @@ class Step2Parameters(ttk.Frame):
         # Variables Tkinter
         self.dt_us = tk.DoubleVar(value=self.app_state["params"]["dt_us"])
         self.flow_eps = tk.DoubleVar(value=self.app_state["params"]["flow_eps"])
+        self.show_derivatives = tk.BooleanVar(
+            value=self.app_state["params"].get("show_derivatives", True)
+        )
 
         self.method_vars = {}
         self.smooth_vars = {}
@@ -122,6 +129,10 @@ class Step2Parameters(ttk.Frame):
                 else:
                     params["trend_lambda"][key] = DEFAULT_TREND_LAMBDA
 
+        # Affichage des dérivées (préférence globale)
+        if "show_derivatives" not in params:
+            params["show_derivatives"] = last_params.get("show_derivatives", True)
+
         # Inversion des courbes (par courbe) - volontairement non persistée
         # entre sessions : une inversion silencieuse sur un nouveau fichier
         # serait une source d'erreur.
@@ -194,6 +205,16 @@ class Step2Parameters(ttk.Frame):
         row.pack(fill="x", pady=5)
         ttk.Label(row, text="Remplacement débits nuls :").pack(side="left")
         ttk.Entry(row, textvariable=self.flow_eps, width=10).pack(side="left", padx=10)
+
+        # Affichage des dérivées
+        row = ttk.Frame(global_params)
+        row.pack(fill="x", pady=5)
+        ttk.Checkbutton(
+            row,
+            text="Afficher les dérivées (pentes)",
+            variable=self.show_derivatives,
+            command=self._on_derivatives_toggle,
+        ).pack(side="left")
 
         # Bouton Aide
         ttk.Button(
@@ -420,6 +441,11 @@ class Step2Parameters(ttk.Frame):
         entry.insert(0, f"{value:.2f}")
         self._on_lambda_change(key)
 
+    def _on_derivatives_toggle(self):
+        """Callback quand l'affichage des dérivées change."""
+        self.app_state["params"]["show_derivatives"] = self.show_derivatives.get()
+        self._update_preview()
+
     def _on_invert_change(self, key):
         """Callback quand l'inversion change pour une courbe."""
         self.app_state["params"]["inverted"][key] = self.invert_vars[key].get()
@@ -469,6 +495,31 @@ Zone "Linéaire"
 Les bornes d'une zone sont ajustées aux points de mesure les plus
 proches. Le raccord entre une zone et le reste de la courbe est
 continu (la courbe lissée passe par la valeur mesurée à la frontière).
+
+"""
+        help_content += "=" * 60 + "\n"
+        help_content += "LECTURE DES DÉRIVÉES (PENTES)\n" + "=" * 60 + "\n\n"
+        help_content += """Le panneau du bas compare la pente des données brutes à celle de la
+courbe traitée. C'est la mesure directe de l'effet du lissage.
+
+Pourquoi c'est important
+   Les variations brusques d'une condition aux limites sont la cause
+   principale de divergence dans Fluent. Diviser la pente maximale par
+   dix est un bon indicateur de stabilité du calcul.
+
+Ce qui est tracé
+   Bleu en escalier : pente entre deux points de mesure consécutifs.
+   Orange : pente de la courbe interpolée.
+   Losange et trait pointillé : instant où la pente est maximale.
+   Encadré : valeurs chiffrées, instants, et pourcentage de réduction.
+
+Échelle verticale
+   Quand un pic isolé écrase tout le reste, l'échelle passe
+   automatiquement en logarithmique symétrique afin de montrer à la fois
+   ce pic et la structure fine des variations.
+
+Une réduction affichée en rouge signale une courbe rendue plus raide
+que les données d'origine : à éviter pour un calcul CFD.
 
 """
         help_content += "=" * 60 + "\n"
@@ -567,13 +618,12 @@ Recommandations :
                 return
 
             n_pts = int(sim_duration / dt) + 1
-
-            if n_pts > MAX_PREVIEW_POINTS:
-                times_preview = np.linspace(0, sim_duration, MAX_PREVIEW_POINTS)
-            else:
-                times_preview = np.linspace(0, sim_duration, n_pts)
+            times_preview = np.linspace(
+                0, sim_duration, min(n_pts, MAX_PREVIEW_POINTS)
+            )
 
             data_raw = self.app_state.get("data_raw", {})
+            show_slopes = self.show_derivatives.get()
 
             for key in self.file_keys:
                 if key not in data_raw:
@@ -596,21 +646,28 @@ Recommandations :
                         trend_lambda=trend_lambda,
                     )
 
-                    # Appliquer l'inversion si activée
-                    is_inverted = self.invert_vars.get(key, tk.BooleanVar(value=False)).get()
-                    invert_coeff = -1.0 if is_inverted else 1.0
+                    sign = -1.0 if self.invert_vars[key].get() else 1.0
+                    times_raw = df["Time_s"].values
+                    raw_values = df["Value"].values * sign
+                    curve_values = interp * sign
 
                     fig = self.preview_figs[key]
                     fig.clear()
-                    ax = fig.add_subplot(111)
+                    if show_slopes:
+                        ax, ax_slope = fig.subplots(
+                            2, 1, sharex=True,
+                            gridspec_kw={"height_ratios": [2, 1]},
+                        )
+                    else:
+                        ax = fig.add_subplot(111)
+                        ax_slope = None
 
-                    raw_values = df["Value"].values * invert_coeff
                     ax.plot(
-                        df["Time_s"], raw_values, "-", color="black",
+                        times_raw, raw_values, "-", color="black",
                         label="Linéaire", linewidth=0.8, alpha=0.3, zorder=1,
                     )
                     ax.plot(
-                        df["Time_s"], raw_values, "o", label="Brut",
+                        times_raw, raw_values, "o", label="Brut",
                         markersize=3, alpha=0.8, zorder=3, color="C0",
                     )
 
@@ -620,30 +677,39 @@ Recommandations :
                     elif method in ["trend_l2", "trend_l1"]:
                         label += f" (λ={trend_lambda:.2f})"
                     ax.plot(
-                        times_preview, interp * invert_coeff, "-", label=label,
+                        times_preview, curve_values, "-", label=label,
                         linewidth=2.5, zorder=2, color="C1",
                     )
 
                     # Zones spéciales (vert : exacte, violet : linéaire)
-                    for zone in zones:
-                        z_type = zone[2] if len(zone) >= 3 else "exact"
-                        z_color = "tab:green" if z_type == "exact" else "tab:purple"
-                        ax.axvspan(zone[0], zone[1], color=z_color, alpha=0.12, linewidth=0)
+                    for axis in (ax, ax_slope):
+                        if axis is None:
+                            continue
+                        for zone in zones:
+                            z_type = zone[2] if len(zone) >= 3 else "exact"
+                            z_color = "tab:green" if z_type == "exact" else "tab:purple"
+                            axis.axvspan(
+                                zone[0], zone[1], color=z_color, alpha=0.12, linewidth=0
+                            )
 
                     error = compute_interpolation_error(df, times_preview, interp)
-                    error_text = format_error_text(error)
-
-                    ax.set_xlabel("Temps (s)")
-                    ax.set_ylabel("Valeur")
 
                     m = re.search(r"inlet(\d+)", key)
                     inlet_num = int(m.group(1)) if m else 1
                     var_type = "Q" if key.startswith("Q_") else "T"
                     custom_name = self.inlet_names.get(inlet_num, f"inlet{inlet_num}")
-                    title = f"{var_type}_{custom_name} - {error_text}"
-                    ax.set_title(title)
-                    ax.legend()
+                    ax.set_title(f"{var_type}_{custom_name} - {format_error_text(error)}")
+                    ax.set_ylabel("Valeur")
+                    ax.legend(fontsize=8)
                     ax.grid(True, alpha=0.3)
+
+                    if ax_slope is None:
+                        ax.set_xlabel("Temps (s)")
+                    else:
+                        self._draw_slope_panel(
+                            ax, ax_slope, times_raw, raw_values,
+                            times_preview, curve_values,
+                        )
 
                     fig.tight_layout()
                     self.preview_canvases[key].draw()
@@ -653,6 +719,137 @@ Recommandations :
 
         except Exception as e:
             print(f"Erreur prévisualisation: {e}")
+
+    def _draw_slope_panel(self, ax_curve, ax, times_raw, raw_values,
+                          times_curve, curve_values):
+        """
+        Trace les dérivées des deux courbes et met en évidence leurs pentes
+        maximales.
+
+        Les variations brusques d'une condition aux limites sont la cause
+        principale de divergence dans Fluent. Comparer la pente maximale des
+        données brutes à celle de la courbe traitée mesure directement
+        l'effet obtenu par le lissage.
+        """
+        raw_positions, raw_slopes = slopes_between_samples(times_raw, raw_values)
+        curve_positions, curve_slopes = slopes_along_curve(times_curve, curve_values)
+
+        # Entre deux mesures la pente est constante : tracé en escalier
+        if raw_slopes.size:
+            steps = np.append(raw_slopes, raw_slopes[-1])
+            ax.step(
+                times_raw, steps, where="post", color="C0", alpha=0.55,
+                linewidth=1.0, label="Brut", zorder=1,
+            )
+        ax.plot(
+            curve_positions, curve_slopes, "-", color="C1",
+            linewidth=1.8, label="Traité", zorder=2,
+        )
+        ax.axhline(0, color="gray", linewidth=0.8, alpha=0.5, zorder=0)
+
+        raw_peak = max_slope(raw_positions, raw_slopes)
+        curve_peak = max_slope(curve_positions, curve_slopes)
+
+        # Repère la pente maximale sur les deux panneaux
+        for peak, color in ((raw_peak, "C0"), (curve_peak, "C1")):
+            if peak is None:
+                continue
+            ax.plot(
+                peak["time"], peak["value"], "D", color=color, markersize=7,
+                markeredgecolor="white", markeredgewidth=1.2, zorder=4,
+            )
+            for axis in (ax_curve, ax):
+                axis.axvline(
+                    peak["time"], color=color, linestyle=":",
+                    linewidth=1.0, alpha=0.6, zorder=0,
+                )
+
+        compressed = self._scale_slope_axis(ax, raw_slopes, curve_slopes)
+
+        ax.set_xlabel("Temps (s)")
+        ax.set_ylabel(
+            "Pente (unité/s)\néchelle log sym." if compressed else "Pente (unité/s)"
+        )
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc="lower right", ncol=2, framealpha=0.85)
+        self._annotate_slopes(ax, raw_peak, curve_peak)
+
+    @staticmethod
+    def _scale_slope_axis(ax, raw_slopes, curve_slopes):
+        """
+        Choisit l'échelle verticale et dégage de la place pour les encadrés.
+
+        Une seule variation très raide, fréquente dans des mesures brutes,
+        aplatit tout le reste sur une échelle linéaire et rend la comparaison
+        illisible. L'échelle logarithmique symétrique montre alors le pic et
+        la structure fine ensemble, en conservant le signe des pentes.
+
+        Returns:
+            True si l'échelle logarithmique symétrique a été retenue
+        """
+        magnitudes = [
+            np.abs(series) for series in (raw_slopes, curve_slopes)
+            if getattr(series, "size", 0)
+        ]
+        compressed = False
+        if magnitudes:
+            peak = max(float(m.max()) for m in magnitudes)
+            typical = max(float(np.percentile(m, 95)) for m in magnitudes)
+            if typical > 0 and peak > 8 * typical:
+                ax.set_yscale("symlog", linthresh=typical)
+                compressed = True
+
+        low, high = ax.get_ylim()
+        if compressed:
+            # En échelle logarithmique la marge doit être multiplicative
+            ax.set_ylim(low, high * 6 if high > 0 else high)
+        else:
+            span = high - low
+            if span <= 0:
+                low, high, span = low - 0.5, high + 0.5, 1.0
+            ax.set_ylim(low, high + 0.55 * span)
+        return compressed
+
+    def _annotate_slopes(self, ax, raw_peak, curve_peak):
+        """Encadré chiffré des pentes maximales et verdict sur la réduction."""
+        if raw_peak is None and curve_peak is None:
+            return
+
+        def describe(peak):
+            if peak is None:
+                return "indisponible"
+            return f"{format_slope_value(peak['value']):>10}  à t = {peak['time']:.4f} s"
+
+        ax.text(
+            0.012, 0.96,
+            "Pente max\n"
+            f"brute    {describe(raw_peak)}\n"
+            f"traitée  {describe(curve_peak)}",
+            transform=ax.transAxes, va="top", ha="left",
+            fontsize=7.5, family="monospace", zorder=5,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
+                      edgecolor="#c8c8c8", alpha=0.92),
+        )
+
+        reduction = slope_reduction_percent(raw_peak, curve_peak)
+        if reduction is None:
+            return
+        if reduction >= 1.0:
+            verdict = f"Variations réduites de {reduction:.0f} %"
+            text_color, fill = "#1b7f3b", "#e6f4ea"
+        elif reduction <= -1.0:
+            verdict = f"Variations accrues de {abs(reduction):.0f} %"
+            text_color, fill = "#a4291f", "#fdecea"
+        else:
+            verdict = "Variations quasi inchangées"
+            text_color, fill = "#8a6100", "#fdf3e0"
+
+        ax.text(
+            0.988, 0.96, verdict, transform=ax.transAxes, va="top", ha="right",
+            fontsize=8, fontweight="bold", color=text_color, zorder=5,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor=fill,
+                      edgecolor=text_color, alpha=0.95),
+        )
 
     def validate(self) -> tuple:
         """Valide les paramètres."""

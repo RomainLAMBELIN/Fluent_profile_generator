@@ -10,6 +10,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from core.constants import INTERP_METHODS
+from core.analysis import (
+    slopes_between_samples, slopes_along_curve, max_slope,
+    slope_reduction_percent, format_slope_value,
+)
 
 
 class Step3Preview(ttk.Frame):
@@ -177,7 +181,17 @@ class Step3Preview(ttk.Frame):
                 inlet_num = int(m.group(1)) if m else col_idx + 1
                 var_type = "Débit" if key.startswith("Q_") else "Température"
                 custom_name = inlet_names.get(inlet_num, f"Inlet {inlet_num}")
-                ax.set_title(f"{var_type} {custom_name}")
+
+                # Rappel de l'effet du lissage sur les variations brusques,
+                # au moment de la vérification avant export
+                slope_line = self._slope_summary(
+                    data_raw.get(key), invert_coeff, times,
+                    data_interp.get(key_renamed),
+                )
+                title = f"{var_type} {custom_name}"
+                if slope_line:
+                    title += f"\n{slope_line}"
+                ax.set_title(title, fontsize=9)
                 ax.legend(fontsize=7)
                 ax.grid(True, alpha=0.3)
 
@@ -186,6 +200,36 @@ class Step3Preview(ttk.Frame):
         canvas = FigureCanvasTkAgg(fig, self.graph_frame)
         canvas.get_tk_widget().pack(fill="both", expand=True)
         canvas.draw()
+
+    @staticmethod
+    def _slope_summary(df, invert_coeff, times, interpolated):
+        """
+        Résume en une ligne la réduction de la pente maximale.
+
+        Returns:
+            Texte prêt à afficher, ou "" si le calcul n'est pas possible
+        """
+        if df is None or interpolated is None or times is None:
+            return ""
+        try:
+            raw_peak = max_slope(*slopes_between_samples(
+                df["Time_s"].values, df["Value"].values * invert_coeff
+            ))
+            curve_peak = max_slope(*slopes_along_curve(times, interpolated))
+        except Exception:
+            return ""
+        if raw_peak is None or curve_peak is None:
+            return ""
+
+        summary = (
+            f"Pente max : {format_slope_value(raw_peak['value'])}"
+            f" → {format_slope_value(curve_peak['value'])} /s"
+        )
+        reduction = slope_reduction_percent(raw_peak, curve_peak)
+        if reduction is not None:
+            sign = "−" if reduction >= 0 else "+"
+            summary += f"  ({sign}{abs(reduction):.0f} %)"
+        return summary
 
     def validate(self) -> tuple:
         """
