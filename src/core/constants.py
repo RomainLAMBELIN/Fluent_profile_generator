@@ -156,18 +156,25 @@ def generate_file_keys(n_inlets: int) -> list:
     return keys
 
 
-def generate_file_labels(inlet_names: dict) -> dict:
+def generate_file_labels(inlet_names: dict, translate=None) -> dict:
     """
     Génère les labels d'affichage pour l'interface.
 
     Args:
         inlet_names: Dict {inlet_idx: nom_personnalisé}, ex: {1: "tulipe", 2: "tige"}
+        translate: Fonction de traduction optionnelle, appelée avec le
+                   gabarit et le nom. Ce module reste ainsi indépendant de
+                   l'interface et du module i18n.
 
     Returns:
         Dict {clé: label}, ex: {"Q_inlet1": "Débit tulipe (Q)", ...}
     """
+    if translate is None:
+        def translate(template, name):
+            return template.format(name=name)
+
     labels = {}
     for idx, name in inlet_names.items():
-        labels[f"Q_inlet{idx}"] = f"Débit {name} (Q)"
-        labels[f"T_inlet{idx}"] = f"Température {name} (T)"
+        labels[f"Q_inlet{idx}"] = translate("Débit {name} (Q)", name)
+        labels[f"T_inlet{idx}"] = translate("Température {name} (T)", name)
     return labels

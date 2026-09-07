@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from core.io import export_prof
+from core.i18n import t
 
 
 class Step4Export(ttk.Frame):
@@ -28,20 +29,20 @@ class Step4Export(ttk.Frame):
         
         ttk.Label(
             center,
-            text="Prêt à exporter le fichier .prof",
+            text=t("Prêt à exporter le fichier .prof"),
             font=("Segoe UI", 12, "bold")
         ).pack(pady=(40, 10))
         
         ttk.Label(
             center,
-            text="Cliquez sur 'Exporter' pour sauvegarder le profil Fluent",
+            text=t("Cliquez sur 'Exporter' pour sauvegarder le profil Fluent"),
             font=("Segoe UI", 10)
         ).pack(pady=(0, 30))
         
         # Bouton export
         self.btn_export = ttk.Button(
             center,
-            text="📁 Exporter vers .prof...",
+            text=t("📁 Exporter vers .prof..."),
             command=self._export_prof
         )
         self.btn_export.pack(pady=10, ipadx=20, ipady=10)
@@ -54,9 +55,9 @@ class Step4Export(ttk.Frame):
         """Sauvegarde le fichier .prof."""
         output_file = filedialog.asksaveasfilename(
             parent=self,
-            title="Enregistrer le fichier .prof",
+            title=t("Enregistrer le fichier .prof"),
             defaultextension=".prof",
-            filetypes=[("Profil Fluent", "*.prof"), ("Tous fichiers", "*.*")]
+            filetypes=[(t("Profil Fluent"), "*.prof"), (t("Tous fichiers"), "*.*")]
         )
         
         if not output_file:
@@ -67,32 +68,37 @@ class Step4Export(ttk.Frame):
             data_interp = self.app_state.get("data_interp", {})
             
             if times is None or not data_interp:
-                raise ValueError("Aucune donnée interpolée disponible")
+                raise ValueError(t("Aucune donnée interpolée disponible"))
             
             export_prof(output_file, times, data_interp)
             
             self.export_done = True
             self.lbl_status.config(
-                text=f"✅ Export réussi !\n\n{output_file}\n\n"
-                     f"{len(data_interp)} colonnes × {len(times):,} points",
+                text=t(
+                    "✅ Export réussi !\n\n{path}\n\n{columns} colonnes × {points} points",
+                    path=output_file, columns=len(data_interp), points=f"{len(times):,}",
+                ),
                 foreground="green"
             )
             
             messagebox.showinfo(
-                "Export terminé",
-                f"Le fichier .prof a été créé avec succès :\n\n{output_file}\n\n"
-                f"{len(data_interp)} colonnes × {len(times):,} points",
+                t("Export terminé"),
+                t(
+                    "Le fichier .prof a été créé avec succès :\n\n{path}\n\n"
+                    "{columns} colonnes × {points} points",
+                    path=output_file, columns=len(data_interp), points=f"{len(times):,}",
+                ),
                 parent=self
             )
         
         except Exception as e:
             self.lbl_status.config(
-                text=f"❌ Erreur lors de l'export :\n\n{e}",
+                text=t("❌ Erreur lors de l'export :\n\n{error}", error=e),
                 foreground="red"
             )
             messagebox.showerror(
-                "Erreur",
-                f"Erreur lors de l'export:\n\n{e}",
+                t("Erreur"),
+                t("Erreur lors de l'export :\n\n{error}", error=e),
                 parent=self
             )
     

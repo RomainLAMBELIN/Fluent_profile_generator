@@ -8,6 +8,10 @@ from tkinter import ttk, messagebox
 from core.io import extract_inlet_data, get_max_simulation_time
 from core.interpolation import generate_time_array, interpolate_all_data
 from core.config import ConfigManager
+from core.i18n import (
+    t, set_language, get_language, available_languages,
+    language_display, language_code,
+)
 from gui.steps import Step1Files, Step2Parameters, Step3Preview, Step4Export
 
 
@@ -39,12 +43,16 @@ class FluentProfGenerator(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("Générateur de profils Fluent (.prof)")
-        self.geometry("1200x800")
-        self.minsize(1000, 700)
 
         # Gestionnaire de configuration
         self.config_manager = ConfigManager()
+
+        # La langue doit être fixée avant toute construction de l'interface
+        set_language(self.config_manager.get_language() or get_language())
+
+        self.title(t("Générateur de profils Fluent (.prof)"))
+        self.geometry("1200x800")
+        self.minsize(1000, 700)
 
         # État global partagé entre toutes les étapes
         self.app_state = {
@@ -89,7 +97,9 @@ class FluentProfGenerator(tk.Tk):
             self.app_state["inlet_names"] = last_inlet_names
 
         self.current_step = 0
-        self.step_widgets = []
+        # Indexé par numéro d'étape : la reconstruction après changement de
+        # langue ne recrée que l'étape affichée, sans décaler les autres
+        self.step_widgets = {}
 
         self._build_ui()
         self._show_step(0)
@@ -104,12 +114,34 @@ class FluentProfGenerator(tk.Tk):
         # En-tête
         header = ttk.Frame(main)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header.columnconfigure(0, weight=1)
 
-        self.lbl_title = ttk.Label(header, text="", font=("Segoe UI", 16, "bold"))
+        titles = ttk.Frame(header)
+        titles.grid(row=0, column=0, sticky="w")
+
+        self.lbl_title = ttk.Label(titles, text="", font=("Segoe UI", 16, "bold"))
         self.lbl_title.pack(anchor="w")
 
-        self.lbl_subtitle = ttk.Label(header, text="", font=("Segoe UI", 10))
+        self.lbl_subtitle = ttk.Label(titles, text="", font=("Segoe UI", 10))
         self.lbl_subtitle.pack(anchor="w", pady=(4, 0))
+
+        # Sélecteur de langue, accessible depuis toutes les étapes
+        lang_frame = ttk.Frame(header)
+        lang_frame.grid(row=0, column=1, sticky="ne")
+
+        self.lbl_language = ttk.Label(lang_frame, text=t("Langue :"))
+        self.lbl_language.pack(side="left", padx=(0, 5))
+
+        self.language_var = tk.StringVar(value=language_display(get_language()))
+        self.combo_language = ttk.Combobox(
+            lang_frame,
+            textvariable=self.language_var,
+            values=list(available_languages().values()),
+            state="readonly",
+            width=10,
+        )
+        self.combo_language.pack(side="left")
+        self.combo_language.bind("<<ComboboxSelected>>", self._on_language_change)
 
         # Zone de contenu
         self.content_frame = ttk.Frame(main)
@@ -121,16 +153,17 @@ class FluentProfGenerator(tk.Tk):
         nav = ttk.Frame(main)
         nav.grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
-        self.btn_prev = ttk.Button(nav, text="← Précédent", command=self._prev_step)
+        self.btn_prev = ttk.Button(nav, text=t("← Précédent"), command=self._prev_step)
         self.btn_prev.pack(side="left", padx=(0, 5))
 
-        self.btn_next = ttk.Button(nav, text="Suivant →", command=self._next_step)
+        self.btn_next = ttk.Button(nav, text=t("Suivant →"), command=self._next_step)
         self.btn_next.pack(side="left", padx=5)
 
         self.lbl_step_indicator = ttk.Label(nav, text="", font=("Segoe UI", 9))
         self.lbl_step_indicator.pack(side="right")
 
-        ttk.Button(nav, text="Quitter", command=self._confirm_quit).pack(side="right", padx=(5, 0))
+        self.btn_quit = ttk.Button(nav, text=t("Quitter"), command=self._confirm_quit)
+        self.btn_quit.pack(side="right", padx=(5, 0))
 
     def _show_step(self, step_num):
         """Affiche l'étape spécifiée."""
@@ -138,19 +171,20 @@ class FluentProfGenerator(tk.Tk):
         step_info = self.STEPS[step_num]
 
         # Mise à jour des titres
-        self.lbl_title.config(text=f"Étape {step_num + 1} : {step_info['title']}")
-        self.lbl_subtitle.config(text=step_info['subtitle'])
+        self.lbl_title.config(text=t(
+            "Étape {n} : {title}", n=step_num + 1, title=t(step_info["title"])
+        ))
+        self.lbl_subtitle.config(text=t(step_info["subtitle"]))
 
         # Nettoyage du contenu
         for widget in self.content_frame.winfo_children():
             widget.pack_forget()
 
         # Créer ou réutiliser le widget de l'étape
-        if step_num >= len(self.step_widgets):
+        step_widget = self.step_widgets.get(step_num)
+        if step_widget is None:
             step_widget = step_info['class'](self.content_frame, self.app_state)
-            self.step_widgets.append(step_widget)
-        else:
-            step_widget = self.step_widgets[step_num]
+            self.step_widgets[step_num] = step_widget
 
         # Afficher le widget
         step_widget.pack(fill="both", expand=True, padx=10, pady=10)
@@ -163,29 +197,56 @@ class FluentProfGenerator(tk.Tk):
         self.btn_prev.config(state="normal" if step_num > 0 else "disabled")
 
         if step_num == len(self.STEPS) - 1:
-            self.btn_next.config(text="Terminer", command=self.destroy)
+            self.btn_next.config(text=t("Terminer"), command=self.destroy)
         else:
-            self.btn_next.config(text="Suivant →", command=self._next_step)
+            self.btn_next.config(text=t("Suivant →"), command=self._next_step)
 
         # Indicateur
-        self.lbl_step_indicator.config(text=f"Étape {step_num + 1} / {len(self.STEPS)}")
+        self.lbl_step_indicator.config(text=t(
+            "Étape {n} / {total}", n=step_num + 1, total=len(self.STEPS)
+        ))
 
     def _invalidate_steps_from(self, step_num):
         """Détruit et supprime les widgets des étapes >= step_num."""
-        while len(self.step_widgets) > step_num:
-            widget = self.step_widgets.pop()
-            widget.destroy()
+        for num in sorted(self.step_widgets):
+            if num >= step_num:
+                self.step_widgets.pop(num).destroy()
+
+    def _on_language_change(self, event=None):
+        """Applique la langue choisie et reconstruit l'interface."""
+        code = language_code(self.language_var.get())
+        if code == get_language():
+            return
+
+        # Conserver les saisies en cours avant de détruire les widgets
+        for widget in self.step_widgets.values():
+            if hasattr(widget, "snapshot"):
+                try:
+                    widget.snapshot()
+                except Exception as exc:
+                    print(f"Snapshot impossible avant changement de langue : {exc}")
+
+        set_language(code)
+        self.config_manager.save_language(code)
+
+        current = self.current_step
+        self._invalidate_steps_from(0)
+
+        self.title(t("Générateur de profils Fluent (.prof)"))
+        self.lbl_language.config(text=t("Langue :"))
+        self.btn_prev.config(text=t("← Précédent"))
+        self.btn_quit.config(text=t("Quitter"))
+        self._show_step(current)
 
     def _next_step(self):
         """Passe à l'étape suivante après validation."""
         # Vérifier que le widget de l'étape actuelle existe
-        if self.current_step < len(self.step_widgets):
-            current_widget = self.step_widgets[self.current_step]
-
+        current_widget = self.step_widgets.get(self.current_step)
+        if current_widget is not None:
             # Validation de l'étape actuelle
             is_valid, error_msg = current_widget.validate()
             if not is_valid:
-                messagebox.showwarning("Validation", error_msg, parent=self)
+                messagebox.showwarning(t("Validation"), error_msg, parent=self)
                 return
 
         # Actions spécifiques selon l'étape
@@ -210,7 +271,11 @@ class FluentProfGenerator(tk.Tk):
                     }
                     self.config_manager.save_last_column_mapping(mapping_data)
             except Exception as e:
-                messagebox.showerror("Erreur", f"Erreur lors du chargement:\n\n{e}", parent=self)
+                messagebox.showerror(
+                    t("Erreur"),
+                    t("Erreur lors du chargement :\n\n{error}", error=e),
+                    parent=self,
+                )
                 return
 
             # Le nombre d'inlets a pu changer : détruire les steps 1+ et recréer
@@ -223,7 +288,11 @@ class FluentProfGenerator(tk.Tk):
                 # Sauvegarder les paramètres step2
                 self.config_manager.save_last_step2_params(self.app_state["params"])
             except Exception as e:
-                messagebox.showerror("Erreur", f"Erreur lors de l'interpolation:\n\n{e}", parent=self)
+                messagebox.showerror(
+                    t("Erreur"),
+                    t("Erreur lors de l'interpolation :\n\n{error}", error=e),
+                    parent=self,
+                )
                 return
 
         # Passer à l'étape suivante
@@ -278,7 +347,9 @@ class FluentProfGenerator(tk.Tk):
 
     def _confirm_quit(self):
         """Confirme la fermeture de l'application."""
-        if messagebox.askyesno("Quitter", "Voulez-vous vraiment quitter ?", parent=self):
+        if messagebox.askyesno(
+            t("Quitter"), t("Voulez-vous vraiment quitter ?"), parent=self
+        ):
             self.destroy()
 
 

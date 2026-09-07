@@ -5,6 +5,8 @@ Utilitaires pour l'analyse des données interpolées
 import numpy as np
 from scipy.integrate import trapezoid
 
+from core.i18n import t
+
 
 def compute_interpolation_error(df, times, interpolated_values):
     """
@@ -57,9 +59,11 @@ def format_error_text(error_dict):
     err_abs = error_dict['absolute_error']
     
     if err_rel == float('inf'):
-        return f"Erreur abs: {err_abs:.2e}"
-    else:
-        return f"Erreur: {err_rel:.3f}% (abs: {err_abs:.2e})"
+        return t("Erreur abs: {absolute}", absolute=f"{err_abs:.2e}")
+    return t(
+        "Erreur: {percent}% (abs: {absolute})",
+        percent=f"{err_rel:.3f}", absolute=f"{err_abs:.2e}",
+    )
 
 
 # ---------------------------------------------------------------------------

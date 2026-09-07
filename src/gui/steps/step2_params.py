@@ -18,6 +18,7 @@ from core.constants import (
 )
 from core.interpolation import interpolate, generate_time_array
 from core.config import ConfigManager
+from core.i18n import t
 from core.analysis import (
     compute_interpolation_error, format_error_text,
     slopes_between_samples, slopes_along_curve, max_slope,
@@ -25,8 +26,22 @@ from core.analysis import (
 )
 from gui.unfiltered_zones_dialog import UnfilteredZonesDialog
 
-# Lookup inversé : affichage → clé de méthode
-_METHOD_DISPLAY_TO_KEY = {v: k for k, v in INTERP_METHODS.items()}
+def _method_labels():
+    """Libellés des méthodes d'interpolation dans la langue courante."""
+    return [t(label) for label in INTERP_METHODS.values()]
+
+
+def _method_key_from_display(display):
+    """
+    Clé de méthode correspondant à un libellé affiché.
+
+    La correspondance est recalculée à chaque appel : les libellés changent
+    avec la langue, une table figée deviendrait fausse après une bascule.
+    """
+    for key, label in INTERP_METHODS.items():
+        if t(label) == display:
+            return key
+    return DEFAULT_INTERP_METHOD
 
 
 class Step2Parameters(ttk.Frame):
@@ -65,7 +80,7 @@ class Step2Parameters(ttk.Frame):
 
         for key in self.file_keys:
             method_key = self.app_state["params"]["methods"][key]
-            method_display = INTERP_METHODS.get(method_key, INTERP_METHODS[DEFAULT_INTERP_METHOD])
+            method_display = t(INTERP_METHODS.get(method_key, INTERP_METHODS[DEFAULT_INTERP_METHOD]))
             self.method_vars[key] = tk.StringVar(value=method_display)
             self.smooth_vars[key] = tk.DoubleVar(value=self.app_state["params"]["smooth_params"][key])
             self.lambda_vars[key] = tk.DoubleVar(value=self.app_state["params"]["trend_lambda"][key])
@@ -153,7 +168,7 @@ class Step2Parameters(ttk.Frame):
         info_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
 
         self.lbl_info = ttk.Label(
-            info_frame, text="Chargement...", font=("Segoe UI", 9), foreground="blue"
+            info_frame, text=t("Chargement..."), font=("Segoe UI", 9), foreground="blue"
         )
         self.lbl_info.pack(anchor="w")
         self._update_info_label()
@@ -189,13 +204,13 @@ class Step2Parameters(ttk.Frame):
         scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
         # Paramètres globaux
-        global_params = ttk.LabelFrame(scrollable_frame, text="Paramètres globaux", padding=10)
+        global_params = ttk.LabelFrame(scrollable_frame, text=t("Paramètres globaux"), padding=10)
         global_params.pack(fill="x", padx=10, pady=10)
 
         # Pas de temps
         row = ttk.Frame(global_params)
         row.pack(fill="x", pady=5)
-        ttk.Label(row, text="Pas de temps (µs) :").pack(side="left")
+        ttk.Label(row, text=t("Pas de temps (µs) :")).pack(side="left")
         ttk.Spinbox(row, from_=0.01, to=1000, textvariable=self.dt_us, width=10).pack(
             side="left", padx=10
         )
@@ -203,7 +218,7 @@ class Step2Parameters(ttk.Frame):
         # Flow eps
         row = ttk.Frame(global_params)
         row.pack(fill="x", pady=5)
-        ttk.Label(row, text="Remplacement débits nuls :").pack(side="left")
+        ttk.Label(row, text=t("Remplacement débits nuls :")).pack(side="left")
         ttk.Entry(row, textvariable=self.flow_eps, width=10).pack(side="left", padx=10)
 
         # Affichage des dérivées
@@ -211,19 +226,22 @@ class Step2Parameters(ttk.Frame):
         row.pack(fill="x", pady=5)
         ttk.Checkbutton(
             row,
-            text="Afficher les dérivées (pentes)",
+            text=t("Afficher les dérivées (pentes)"),
             variable=self.show_derivatives,
             command=self._on_derivatives_toggle,
         ).pack(side="left")
 
         # Bouton Aide
         ttk.Button(
-            global_params, text="? Aide sur les méthodes et les zones",
+            global_params, text=t("? Aide sur les méthodes et les zones"),
             command=self._show_help_dialog,
         ).pack(fill="x", pady=(8, 0))
 
         # Configuration par courbe
-        curve_labels = generate_file_labels(self.inlet_names)
+        curve_labels = generate_file_labels(
+            self.inlet_names,
+            translate=lambda template, name: t(template, name=name),
+        )
 
         for key in self.file_keys:
             label = curve_labels.get(key, key)
@@ -231,7 +249,7 @@ class Step2Parameters(ttk.Frame):
 
         # Bouton rafraîchir
         ttk.Button(
-            scrollable_frame, text="Rafraîchir prévisualisations", command=self._update_preview
+            scrollable_frame, text=t("Rafraîchir prévisualisations"), command=self._update_preview
         ).pack(fill="x", padx=10, pady=10)
 
         # Panneau droit : Prévisualisations
@@ -268,11 +286,11 @@ class Step2Parameters(ttk.Frame):
         # Méthode
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=2)
-        ttk.Label(row, text="Méthode :", width=12).pack(side="left")
+        ttk.Label(row, text=t("Méthode :"), width=12).pack(side="left")
         combo = ttk.Combobox(
             row,
             textvariable=self.method_vars[key],
-            values=list(INTERP_METHODS.values()),
+            values=_method_labels(),
             state="readonly",
             width=30,
         )
@@ -282,7 +300,7 @@ class Step2Parameters(ttk.Frame):
         # Lissage (pour spline)
         smooth_row = ttk.Frame(frame)
         smooth_row.pack(fill="x", pady=2)
-        ttk.Label(smooth_row, text="Lissage :", width=12).pack(side="left")
+        ttk.Label(smooth_row, text=t("Lissage :"), width=12).pack(side="left")
 
         smooth_entry = ttk.Entry(smooth_row, width=10)
         smooth_entry.insert(0, f"{self.smooth_vars[key].get():.4f}")
@@ -320,7 +338,7 @@ class Step2Parameters(ttk.Frame):
         lambda_row.pack(fill="x", pady=2)
         self.lambda_frames[key] = lambda_row
 
-        ttk.Label(lambda_row, text="Lambda :", width=12).pack(side="left")
+        ttk.Label(lambda_row, text=t("Lambda :"), width=12).pack(side="left")
 
         lambda_entry = ttk.Entry(lambda_row, width=10)
         lambda_entry.insert(0, f"{self.lambda_vars[key].get():.2f}")
@@ -360,7 +378,7 @@ class Step2Parameters(ttk.Frame):
         invert_row = ttk.Frame(frame)
         invert_row.pack(fill="x", pady=2)
         ttk.Checkbutton(
-            invert_row, text="Inverser la courbe (×-1)",
+            invert_row, text=t("Inverser la courbe (×-1)"),
             variable=self.invert_vars[key],
             command=lambda k=key: self._on_invert_change(k),
         ).pack(side="left")
@@ -369,17 +387,17 @@ class Step2Parameters(ttk.Frame):
         row = ttk.Frame(frame)
         row.pack(fill="x", pady=2)
         ttk.Button(
-            row, text="Zones", command=lambda k=key: self._configure_zones(k), width=12
+            row, text=t("Zones"), command=lambda k=key: self._configure_zones(k), width=12
         ).pack(side="left")
 
-        zones_lbl = ttk.Label(row, text="0 zone", font=("Segoe UI", 8), foreground="gray")
+        zones_lbl = ttk.Label(row, text=t("0 zone"), font=("Segoe UI", 8), foreground="gray")
         zones_lbl.pack(side="left", padx=10)
         self.zones_labels[key] = zones_lbl
 
     def _on_method_change(self, key):
         """Callback quand la méthode change pour une courbe."""
         method_display = self.method_vars[key].get()
-        method_key = _METHOD_DISPLAY_TO_KEY.get(method_display, DEFAULT_INTERP_METHOD)
+        method_key = _method_key_from_display(method_display)
 
         self.app_state["params"]["methods"][key] = method_key
         self._update_param_visibility(key)
@@ -388,7 +406,7 @@ class Step2Parameters(ttk.Frame):
     def _update_param_visibility(self, key):
         """Met à jour la visibilité des paramètres selon la méthode."""
         method_display = self.method_vars[key].get()
-        method_key = _METHOD_DISPLAY_TO_KEY.get(method_display, "pchip")
+        method_key = _method_key_from_display(method_display)
 
         is_spline = method_key == "spline"
         is_trend = method_key in ["trend_l2", "trend_l1"]
@@ -454,7 +472,7 @@ class Step2Parameters(ttk.Frame):
     def _show_help_dialog(self):
         """Affiche la fenêtre d'aide sur les méthodes d'interpolation."""
         help_window = tk.Toplevel(self)
-        help_window.title("Aide - Méthodes d'interpolation")
+        help_window.title(t("Aide - Méthodes d'interpolation"))
         help_window.geometry("700x600")
         help_window.transient(self.winfo_toplevel())
 
@@ -463,7 +481,7 @@ class Step2Parameters(ttk.Frame):
 
         title_label = ttk.Label(
             main_frame,
-            text="Guide des méthodes d'interpolation",
+            text=t("Guide des méthodes d'interpolation"),
             font=("Helvetica", 14, "bold"),
         )
         title_label.pack(pady=(0, 10))
@@ -473,14 +491,14 @@ class Step2Parameters(ttk.Frame):
         )
         text_widget.pack(fill="both", expand=True, pady=5)
 
-        help_content = "MÉTHODES D'INTERPOLATION\n" + "=" * 60 + "\n\n"
+        help_content = t("MÉTHODES D'INTERPOLATION") + "\n" + "=" * 60 + "\n\n"
         for method_key, method_name in INTERP_METHODS.items():
-            help_content += f"--- {method_name} ---\n"
-            help_content += INTERP_METHODS_HELP.get(method_key, "") + "\n\n"
+            help_content += f"--- {t(method_name)} ---\n"
+            help_content += t(INTERP_METHODS_HELP.get(method_key, "")) + "\n\n"
 
         help_content += "\n" + "=" * 60 + "\n"
-        help_content += "ZONES SPECIALES\n" + "=" * 60 + "\n\n"
-        help_content += """Les zones spéciales permettent de définir des régions où l'interpolation
+        help_content += t("ZONES SPÉCIALES") + "\n" + "=" * 60 + "\n\n"
+        help_content += t("""Les zones spéciales permettent de définir des régions où l'interpolation
 est différente du reste de la courbe.
 
 Zone "Exacte" (PCHIP)
@@ -496,10 +514,10 @@ Les bornes d'une zone sont ajustées aux points de mesure les plus
 proches. Le raccord entre une zone et le reste de la courbe est
 continu (la courbe lissée passe par la valeur mesurée à la frontière).
 
-"""
+""")
         help_content += "=" * 60 + "\n"
-        help_content += "LECTURE DES DÉRIVÉES (PENTES)\n" + "=" * 60 + "\n\n"
-        help_content += """Le panneau du bas compare la pente des données brutes à celle de la
+        help_content += t("LECTURE DES DÉRIVÉES (PENTES)") + "\n" + "=" * 60 + "\n\n"
+        help_content += t("""Le panneau du bas compare la pente des données brutes à celle de la
 courbe traitée. C'est la mesure directe de l'effet du lissage.
 
 Pourquoi c'est important
@@ -521,10 +539,10 @@ Ce qui est tracé
 Une réduction affichée en rouge signale une courbe rendue plus raide
 que les données d'origine : à éviter pour un calcul CFD.
 
-"""
+""")
         help_content += "=" * 60 + "\n"
-        help_content += "RECOMMANDATIONS CFD\n" + "=" * 60 + "\n\n"
-        help_content += """Pour les simulations CFD (Ansys Fluent), les variations brusques
+        help_content += t("RECOMMANDATIONS CFD") + "\n" + "=" * 60 + "\n\n"
+        help_content += t("""Pour les simulations CFD (Ansys Fluent), les variations brusques
 aux conditions aux limites peuvent causer des divergences.
 
 Recommandations :
@@ -532,12 +550,12 @@ Recommandations :
 2. Si divergence, augmenter lambda (10, 20, 50...)
 3. Pour données très bruitées : Trend Filter L1
 4. Vérifier visuellement que les transitions sont douces
-"""
+""")
 
         text_widget.insert("1.0", help_content)
         text_widget.config(state="disabled")
 
-        ttk.Button(main_frame, text="Fermer", command=help_window.destroy).pack(pady=10)
+        ttk.Button(main_frame, text=t("Fermer"), command=help_window.destroy).pack(pady=10)
 
     def _configure_zones(self, key):
         """Configure les zones non-filtrées pour une courbe."""
@@ -546,12 +564,12 @@ Recommandations :
 
         m = re.search(r"inlet(\d+)", key)
         inlet_num = int(m.group(1)) if m else 1
-        var_type = "Débit" if key.startswith("Q_") else "Température"
-        custom_name = self.inlet_names.get(inlet_num, f"Inlet {inlet_num}")
+        var_type = t("Débit") if key.startswith("Q_") else t("Température")
+        custom_name = self.inlet_names.get(inlet_num, t("Inlet {n}", n=inlet_num))
 
         df = self.app_state.get("data_raw", {}).get(key, None)
         method_display = self.method_vars[key].get()
-        method = _METHOD_DISPLAY_TO_KEY.get(method_display, "pchip")
+        method = _method_key_from_display(method_display)
         smooth = self.smooth_vars[key].get()
 
         if df is None or len(df) < 2:
@@ -561,7 +579,7 @@ Recommandations :
             self,
             sim_duration,
             zones,
-            title=f"Zones spéciales - {var_type} {custom_name}",
+            title=t("Zones spéciales - {variable} {name}", variable=var_type, name=custom_name),
             df=df,
             current_method=method,
             current_smooth=smooth,
@@ -582,9 +600,9 @@ Recommandations :
         for key, label in self.zones_labels.items():
             n_zones = len(zones.get(key, []))
             if n_zones > 0:
-                label.config(text=f"{n_zones} zone(s)", foreground="green")
+                label.config(text=t("{n} zone(s)", n=n_zones), foreground="green")
             else:
-                label.config(text="0 zone", foreground="gray")
+                label.config(text=t("0 zone"), foreground="gray")
 
     def _update_info_label(self):
         """Met à jour le bandeau d'informations."""
@@ -597,14 +615,16 @@ Recommandations :
                 zones = self.app_state["params"]["unfiltered_zones"]
                 total_zones = sum(len(z) for z in zones.values())
 
-                info_text = f"Durée simulation : {sim_duration:.6f} s  |  "
-                info_text += f"Pas de temps : {dt:.3e} s ({self.dt_us.get():.2f} µs)  |  "
-                info_text += f"Points interpolés : {n_pts:,}  |  "
-                info_text += f"Zones définies : {total_zones}"
-
-                self.lbl_info.config(text=info_text)
+                self.lbl_info.config(text=t(
+                    "Durée simulation : {duration} s  |  Pas de temps : {dt} s "
+                    "({dt_us} µs)  |  Points interpolés : {points}  |  "
+                    "Zones définies : {zones}",
+                    duration=f"{sim_duration:.6f}", dt=f"{dt:.3e}",
+                    dt_us=f"{self.dt_us.get():.2f}", points=f"{n_pts:,}",
+                    zones=total_zones,
+                ))
             else:
-                self.lbl_info.config(text="Chargement des paramètres...")
+                self.lbl_info.config(text=t("Chargement des paramètres..."))
         except Exception as e:
             print(f"Erreur update info: {e}")
 
@@ -630,7 +650,7 @@ Recommandations :
                     continue
                 df = data_raw[key]
                 method_display = self.method_vars[key].get()
-                method = _METHOD_DISPLAY_TO_KEY.get(method_display, "pchip")
+                method = _method_key_from_display(method_display)
 
                 smooth = self.smooth_vars[key].get()
                 trend_lambda = self.lambda_vars[key].get()
@@ -664,14 +684,14 @@ Recommandations :
 
                     ax.plot(
                         times_raw, raw_values, "-", color="black",
-                        label="Linéaire", linewidth=0.8, alpha=0.3, zorder=1,
+                        label=t("Linéaire"), linewidth=0.8, alpha=0.3, zorder=1,
                     )
                     ax.plot(
-                        times_raw, raw_values, "o", label="Brut",
+                        times_raw, raw_values, "o", label=t("Brut"),
                         markersize=3, alpha=0.8, zorder=3, color="C0",
                     )
 
-                    label = INTERP_METHODS[method]
+                    label = t(INTERP_METHODS[method])
                     if method == "spline":
                         label += f" (s={smooth:.4f})"
                     elif method in ["trend_l2", "trend_l1"]:
@@ -699,12 +719,12 @@ Recommandations :
                     var_type = "Q" if key.startswith("Q_") else "T"
                     custom_name = self.inlet_names.get(inlet_num, f"inlet{inlet_num}")
                     ax.set_title(f"{var_type}_{custom_name} - {format_error_text(error)}")
-                    ax.set_ylabel("Valeur")
+                    ax.set_ylabel(t("Valeur"))
                     ax.legend(fontsize=8)
                     ax.grid(True, alpha=0.3)
 
                     if ax_slope is None:
-                        ax.set_xlabel("Temps (s)")
+                        ax.set_xlabel(t("Temps (s)"))
                     else:
                         self._draw_slope_panel(
                             ax, ax_slope, times_raw, raw_values,
@@ -739,11 +759,11 @@ Recommandations :
             steps = np.append(raw_slopes, raw_slopes[-1])
             ax.step(
                 times_raw, steps, where="post", color="C0", alpha=0.55,
-                linewidth=1.0, label="Brut", zorder=1,
+                linewidth=1.0, label=t("Brut"), zorder=1,
             )
         ax.plot(
             curve_positions, curve_slopes, "-", color="C1",
-            linewidth=1.8, label="Traité", zorder=2,
+            linewidth=1.8, label=t("Traité"), zorder=2,
         )
         ax.axhline(0, color="gray", linewidth=0.8, alpha=0.5, zorder=0)
 
@@ -766,9 +786,10 @@ Recommandations :
 
         compressed = self._scale_slope_axis(ax, raw_slopes, curve_slopes)
 
-        ax.set_xlabel("Temps (s)")
+        ax.set_xlabel(t("Temps (s)"))
         ax.set_ylabel(
-            "Pente (unité/s)\néchelle log sym." if compressed else "Pente (unité/s)"
+            t("Pente (unité/s)\néchelle log sym.") if compressed
+            else t("Pente (unité/s)")
         )
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=7, loc="lower right", ncol=2, framealpha=0.85)
@@ -817,14 +838,19 @@ Recommandations :
 
         def describe(peak):
             if peak is None:
-                return "indisponible"
-            return f"{format_slope_value(peak['value']):>10}  à t = {peak['time']:.4f} s"
+                return t("indisponible")
+            return "{:>10}  {}".format(
+                format_slope_value(peak["value"]),
+                t("à t = {time} s", time=f"{peak['time']:.4f}"),
+            )
 
         ax.text(
             0.012, 0.96,
-            "Pente max\n"
-            f"brute    {describe(raw_peak)}\n"
-            f"traitée  {describe(curve_peak)}",
+            "{}\n{:<8} {}\n{:<8} {}".format(
+                t("Pente max"),
+                t("brute"), describe(raw_peak),
+                t("traitée"), describe(curve_peak),
+            ),
             transform=ax.transAxes, va="top", ha="left",
             fontsize=7.5, family="monospace", zorder=5,
             bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
@@ -835,13 +861,13 @@ Recommandations :
         if reduction is None:
             return
         if reduction >= 1.0:
-            verdict = f"Variations réduites de {reduction:.0f} %"
+            verdict = t("Variations réduites de {percent} %", percent=f"{reduction:.0f}")
             text_color, fill = "#1b7f3b", "#e6f4ea"
         elif reduction <= -1.0:
-            verdict = f"Variations accrues de {abs(reduction):.0f} %"
+            verdict = t("Variations accrues de {percent} %", percent=f"{abs(reduction):.0f}")
             text_color, fill = "#a4291f", "#fdecea"
         else:
-            verdict = "Variations quasi inchangées"
+            verdict = t("Variations quasi inchangées")
             text_color, fill = "#8a6100", "#fdf3e0"
 
         ax.text(
@@ -851,17 +877,25 @@ Recommandations :
                       edgecolor=text_color, alpha=0.95),
         )
 
+    def snapshot(self):
+        """Enregistre les paramètres globaux saisis, avant reconstruction."""
+        try:
+            self.app_state["params"]["dt_us"] = self.dt_us.get()
+            self.app_state["params"]["flow_eps"] = self.flow_eps.get()
+        except Exception:
+            pass
+
     def validate(self) -> tuple:
         """Valide les paramètres."""
         try:
             if self.dt_us.get() <= 0:
-                return False, "Le pas de temps doit être > 0"
+                return False, t("Le pas de temps doit être > 0")
             if self.flow_eps.get() <= 0:
-                return False, "FLOW_EPS doit être > 0"
+                return False, t("FLOW_EPS doit être > 0")
 
             self.app_state["params"]["dt_us"] = self.dt_us.get()
             self.app_state["params"]["flow_eps"] = self.flow_eps.get()
 
             return True, ""
         except Exception as e:
-            return False, f"Erreur : {e}"
+            return False, t("Erreur : {error}", error=e)

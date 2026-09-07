@@ -20,7 +20,9 @@ from matplotlib.widgets import SpanSelector
 from core.interpolation import interpolate, zones_to_index_ranges, prepare_xy
 from core.analysis import compute_interpolation_error, format_error_text
 from core.constants import INTERP_METHODS
+from core.i18n import t
 
+#: Libellés sources des types de zone, traduits à l'affichage
 ZONE_TYPE_LABELS = {"exact": "Exacte", "linear": "Linéaire"}
 ZONE_COLORS = {"exact": "tab:green", "linear": "tab:purple"}
 PENDING_COLOR = "tab:red"
@@ -69,8 +71,8 @@ class UnfilteredZonesDialog(tk.Toplevel):
     # Utilitaires
     # ------------------------------------------------------------------
 
-    def _snap_index(self, t):
-        return int(np.argmin(np.abs(self.x - float(t))))
+    def _snap_index(self, value):
+        return int(np.argmin(np.abs(self.x - float(value))))
 
     def _zone_indices(self, zone):
         return self._snap_index(zone[0]), self._snap_index(zone[1])
@@ -85,9 +87,9 @@ class UnfilteredZonesDialog(tk.Toplevel):
         self.entry_end.delete(0, "end")
         self.entry_end.insert(0, f"{t1:.6f}")
 
-    def _interp(self, t, zones):
+    def _interp(self, times, zones):
         return interpolate(
-            self.df, t, method=self.method, smooth_factor=self.smooth,
+            self.df, times, method=self.method, smooth_factor=self.smooth,
             unfiltered_zones=zones, trend_lambda=self.trend_lambda,
         )
 
@@ -101,12 +103,12 @@ class UnfilteredZonesDialog(tk.Toplevel):
         main.columnconfigure(1, weight=1)
         main.rowconfigure(1, weight=1)
 
-        method_label = INTERP_METHODS.get(self.method, self.method)
-        info = (
-            "Cliquez-glissez sur le graphique pour sélectionner une plage, ou saisissez les bornes. "
-            "Les bornes sont ajustées aux points de mesure les plus proches. "
-            f"Méthode globale : {method_label}. "
-            f"Données : {self.x[0]:.6f} → {self.x[-1]:.6f} s ({len(self.x)} points)."
+        info = t(
+            "Cliquez-glissez sur le graphique pour sélectionner une plage, ou saisissez "
+            "les bornes. Les bornes sont ajustées aux points de mesure les plus proches. "
+            "Méthode globale : {method}. Données : {start} → {end} s ({points} points).",
+            method=t(INTERP_METHODS.get(self.method, self.method)),
+            start=f"{self.x[0]:.6f}", end=f"{self.x[-1]:.6f}", points=len(self.x),
         )
         ttk.Label(main, text=info, wraplength=1100, justify="left").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
@@ -117,7 +119,7 @@ class UnfilteredZonesDialog(tk.Toplevel):
         left.grid(row=1, column=0, sticky="ns", padx=(0, 10))
         left.rowconfigure(0, weight=1)
 
-        list_frame = ttk.LabelFrame(left, text="Zones définies", padding=8)
+        list_frame = ttk.LabelFrame(left, text=t("Zones définies"), padding=8)
         list_frame.grid(row=0, column=0, sticky="nsew")
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
@@ -128,10 +130,10 @@ class UnfilteredZonesDialog(tk.Toplevel):
         )
         for col, text, width, anchor in (
             ("num", "#", 30, "center"),
-            ("start", "Début (s)", 90, "e"),
-            ("end", "Fin (s)", 90, "e"),
-            ("type", "Type", 70, "w"),
-            ("pts", "Points", 55, "center"),
+            ("start", t("Début (s)"), 90, "e"),
+            ("end", t("Fin (s)"), 90, "e"),
+            ("type", t("Type"), 70, "w"),
+            ("pts", t("Points"), 55, "center"),
         ):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=width, anchor=anchor, stretch=False)
@@ -144,58 +146,58 @@ class UnfilteredZonesDialog(tk.Toplevel):
         btns = ttk.Frame(list_frame)
         btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.btn_delete = ttk.Button(
-            btns, text="Supprimer", command=self._delete_selected, state="disabled"
+            btns, text=t("Supprimer"), command=self._delete_selected, state="disabled"
         )
         self.btn_delete.pack(side="left")
-        ttk.Button(btns, text="Tout supprimer", command=self._clear_all).pack(
+        ttk.Button(btns, text=t("Tout supprimer"), command=self._clear_all).pack(
             side="left", padx=(5, 0)
         )
 
-        edit_frame = ttk.LabelFrame(left, text="Zone en cours d'édition", padding=8)
+        edit_frame = ttk.LabelFrame(left, text=t("Zone en cours d'édition"), padding=8)
         edit_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         edit_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(edit_frame, text="Début (s) :").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Label(edit_frame, text=t("Début (s) :")).grid(row=0, column=0, sticky="w", pady=2)
         self.entry_start = ttk.Entry(edit_frame, width=14)
         self.entry_start.grid(row=0, column=1, sticky="w", pady=2)
-        ttk.Label(edit_frame, text="Fin (s) :").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(edit_frame, text=t("Fin (s) :")).grid(row=1, column=0, sticky="w", pady=2)
         self.entry_end = ttk.Entry(edit_frame, width=14)
         self.entry_end.grid(row=1, column=1, sticky="w", pady=2)
         for entry in (self.entry_start, self.entry_end):
             entry.bind("<Return>", lambda ev: self._on_entry_change())
             entry.bind("<FocusOut>", lambda ev: self._on_entry_change())
 
-        ttk.Label(edit_frame, text="Type :").grid(row=2, column=0, sticky="nw", pady=(6, 2))
+        ttk.Label(edit_frame, text=t("Type :")).grid(row=2, column=0, sticky="nw", pady=(6, 2))
         type_frame = ttk.Frame(edit_frame)
         type_frame.grid(row=2, column=1, sticky="w", pady=(6, 2))
         ttk.Radiobutton(
-            type_frame, text="Exacte (PCHIP par tous les points)",
+            type_frame, text=t("Exacte (PCHIP par tous les points)"),
             variable=self.zone_type_var, value="exact", command=self._update_preview,
         ).pack(anchor="w")
         ttk.Radiobutton(
-            type_frame, text="Linéaire (droite entre les bornes)",
+            type_frame, text=t("Linéaire (droite entre les bornes)"),
             variable=self.zone_type_var, value="linear", command=self._update_preview,
         ).pack(anchor="w")
 
         self.lbl_edit_info = ttk.Label(
-            edit_frame, text="Aucune plage sélectionnée.", foreground="gray",
+            edit_frame, text=t("Aucune plage sélectionnée."), foreground="gray",
             wraplength=300, justify="left",
         )
         self.lbl_edit_info.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 2))
 
         action = ttk.Frame(edit_frame)
         action.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        self.btn_add = ttk.Button(action, text="Ajouter", command=self._add_zone)
+        self.btn_add = ttk.Button(action, text=t("Ajouter"), command=self._add_zone)
         self.btn_add.pack(side="left")
         self.btn_apply = ttk.Button(
-            action, text="Appliquer", command=self._apply_zone, state="disabled"
+            action, text=t("Appliquer"), command=self._apply_zone, state="disabled"
         )
         self.btn_apply.pack(side="left", padx=(5, 0))
-        ttk.Button(action, text="Nouvelle", command=self._new_zone).pack(
+        ttk.Button(action, text=t("Nouvelle"), command=self._new_zone).pack(
             side="left", padx=(5, 0)
         )
 
-        legend = (
+        legend = t(
             "Vert : zone exacte · Violet : zone linéaire · Rouge hachuré : zone en édition.\n"
             "Les zones ne peuvent pas se chevaucher (elles peuvent se toucher).\n"
             "Le raccord avec le reste de la courbe est continu."
@@ -206,7 +208,7 @@ class UnfilteredZonesDialog(tk.Toplevel):
         ).grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         # ---- Panneau droit : graphique ----
-        right = ttk.LabelFrame(main, text="Prévisualisation", padding=5)
+        right = ttk.LabelFrame(main, text=t("Prévisualisation"), padding=5)
         right.grid(row=1, column=1, sticky="nsew")
         self.fig = Figure(figsize=(7, 4.5), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.fig, right)
@@ -219,7 +221,7 @@ class UnfilteredZonesDialog(tk.Toplevel):
         bottom = ttk.Frame(main)
         bottom.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         ttk.Button(bottom, text="OK", command=self._on_ok, width=12).pack(side="right", padx=(5, 0))
-        ttk.Button(bottom, text="Annuler", command=self._on_cancel, width=12).pack(side="right")
+        ttk.Button(bottom, text=t("Annuler"), command=self._on_cancel, width=12).pack(side="right")
         self.lbl_status = ttk.Label(bottom, text="", foreground="gray")
         self.lbl_status.pack(side="left")
 
@@ -235,7 +237,7 @@ class UnfilteredZonesDialog(tk.Toplevel):
             self.tree.insert(
                 "", "end", iid=str(i),
                 values=(i + 1, f"{t0:.6f}", f"{t1:.6f}",
-                        ZONE_TYPE_LABELS.get(zt, zt), i1 - i0 + 1),
+                        t(ZONE_TYPE_LABELS.get(zt, zt)), i1 - i0 + 1),
             )
         if self.selected_idx is not None and 0 <= self.selected_idx < len(self.zones):
             self.tree.selection_set(str(self.selected_idx))
@@ -244,7 +246,7 @@ class UnfilteredZonesDialog(tk.Toplevel):
         has_sel = self.selected_idx is not None
         self.btn_delete.config(state="normal" if has_sel else "disabled")
         self.btn_apply.config(state="normal" if has_sel else "disabled")
-        self.lbl_status.config(text=f"{len(self.zones)} zone(s) définie(s)")
+        self.lbl_status.config(text=t("{n} zone(s) définie(s)", n=len(self.zones)))
 
     def _on_tree_select(self, event=None):
         sel = self.tree.selection()
@@ -272,7 +274,9 @@ class UnfilteredZonesDialog(tk.Toplevel):
     def _clear_all(self):
         if not self.zones:
             return
-        if messagebox.askyesno("Confirmer", "Supprimer toutes les zones ?", parent=self):
+        if messagebox.askyesno(
+            t("Confirmer"), t("Supprimer toutes les zones ?"), parent=self
+        ):
             self.zones = []
             self._new_zone()
 
@@ -316,7 +320,9 @@ class UnfilteredZonesDialog(tk.Toplevel):
             t0 = float(s0)
             t1 = float(s1)
         except ValueError:
-            self.lbl_edit_info.config(text="Bornes invalides : saisir deux nombres.", foreground="red")
+            self.lbl_edit_info.config(
+                text=t("Bornes invalides : saisir deux nombres."), foreground="red"
+            )
             return
         i0 = self._snap_index(t0)
         i1 = self._snap_index(t1)
@@ -326,7 +332,7 @@ class UnfilteredZonesDialog(tk.Toplevel):
             i1 = min(i0 + 1, len(self.x) - 1)
         if i1 <= i0:
             self.lbl_edit_info.config(
-                text="La zone doit contenir au moins 2 points de mesure.", foreground="red"
+                text=t("La zone doit contenir au moins 2 points de mesure."), foreground="red"
             )
             return
         if self.pending == (i0, i1):
@@ -338,12 +344,15 @@ class UnfilteredZonesDialog(tk.Toplevel):
 
     def _update_edit_info(self):
         if self.pending is None:
-            self.lbl_edit_info.config(text="Aucune plage sélectionnée.", foreground="gray")
+            self.lbl_edit_info.config(text=t("Aucune plage sélectionnée."), foreground="gray")
             return
         i0, i1 = self.pending
         self.lbl_edit_info.config(
-            text=f"Plage ajustée : {self.x[i0]:.6f} → {self.x[i1]:.6f} s "
-                 f"({i1 - i0 + 1} points de mesure)",
+            text=t(
+                "Plage ajustée : {start} → {end} s ({points} points de mesure)",
+                start=f"{self.x[i0]:.6f}", end=f"{self.x[i1]:.6f}",
+                points=i1 - i0 + 1,
+            ),
             foreground="gray",
         )
 
@@ -351,9 +360,11 @@ class UnfilteredZonesDialog(tk.Toplevel):
         """Retourne (i0, i1) si la zone en édition est valide, sinon None (avec message)."""
         if self.pending is None:
             messagebox.showinfo(
-                "Zone",
-                "Définissez d'abord une plage : cliquez-glissez sur le graphique "
-                "ou saisissez les bornes.",
+                t("Zone"),
+                t(
+                    "Définissez d'abord une plage : cliquez-glissez sur le graphique "
+                    "ou saisissez les bornes."
+                ),
                 parent=self,
             )
             return None
@@ -364,9 +375,11 @@ class UnfilteredZonesDialog(tk.Toplevel):
             j0, j1 = self._zone_indices(zone)
             if i0 < j1 and i1 > j0:
                 messagebox.showwarning(
-                    "Chevauchement",
-                    f"La plage chevauche la zone {j + 1} "
-                    f"[{zone[0]:.6f} → {zone[1]:.6f}].",
+                    t("Chevauchement"),
+                    t(
+                        "La plage chevauche la zone {n} [{start} → {end}].",
+                        n=j + 1, start=f"{zone[0]:.6f}", end=f"{zone[1]:.6f}",
+                    ),
                     parent=self,
                 )
                 return None
@@ -411,34 +424,40 @@ class UnfilteredZonesDialog(tk.Toplevel):
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         n = len(self.x)
-        t = np.linspace(self.x[0], self.x[-1], int(min(3000, max(300, 10 * n))))
+        times = np.linspace(self.x[0], self.x[-1], int(min(3000, max(300, 10 * n))))
         s = self.sign
         title_parts = []
         errors = []
 
         ax.plot(self.x, s * self.y, "o", markersize=3, color="C0", alpha=0.8,
-                label="Mesures", zorder=4)
+                label=t("Mesures"), zorder=4)
 
         try:
-            y_ref = self._interp(t, [])
-            ax.plot(t, s * y_ref, "-", color="black", linewidth=1.2, alpha=0.35,
-                    label="Sans zone", zorder=1)
-            title_parts.append(
-                "Sans zone : " + format_error_text(compute_interpolation_error(self.df, t, y_ref))
-            )
+            y_ref = self._interp(times, [])
+            ax.plot(times, s * y_ref, "-", color="black", linewidth=1.2, alpha=0.35,
+                    label=t("Sans zone"), zorder=1)
+            title_parts.append(t(
+                "Sans zone : {error}",
+                error=format_error_text(
+                    compute_interpolation_error(self.df, times, y_ref)
+                ),
+            ))
         except Exception as e:
-            errors.append(f"référence : {e}")
+            errors.append(t("référence : {error}", error=e))
 
         if self.zones:
             try:
-                y_z = self._interp(t, self.zones)
-                ax.plot(t, s * y_z, "-", color="C1", linewidth=2.2,
-                        label=f"Avec {len(self.zones)} zone(s)", zorder=2)
-                title_parts.append(
-                    "Avec zones : " + format_error_text(compute_interpolation_error(self.df, t, y_z))
-                )
+                y_z = self._interp(times, self.zones)
+                ax.plot(times, s * y_z, "-", color="C1", linewidth=2.2,
+                        label=t("Avec {n} zone(s)", n=len(self.zones)), zorder=2)
+                title_parts.append(t(
+                    "Avec zones : {error}",
+                    error=format_error_text(
+                        compute_interpolation_error(self.df, times, y_z)
+                    ),
+                ))
             except Exception as e:
-                errors.append(f"zones : {e}")
+                errors.append(t("zones : {error}", error=e))
 
         pending_zone = None
         if self.pending is not None:
@@ -447,11 +466,11 @@ class UnfilteredZonesDialog(tk.Toplevel):
             preview_zones = [z for j, z in enumerate(self.zones) if j != self.selected_idx]
             preview_zones.append(pending_zone)
             try:
-                y_p = self._interp(t, preview_zones)
-                ax.plot(t, s * y_p, "--", color=PENDING_COLOR, linewidth=1.8,
-                        label="Aperçu avec la zone en édition", zorder=3)
+                y_p = self._interp(times, preview_zones)
+                ax.plot(times, s * y_p, "--", color=PENDING_COLOR, linewidth=1.8,
+                        label=t("Aperçu avec la zone en édition"), zorder=3)
             except Exception as e:
-                errors.append(f"aperçu : {e}")
+                errors.append(t("aperçu : {error}", error=e))
 
         for j, (t0, t1, zt) in enumerate(self.zones):
             color = ZONE_COLORS.get(zt, "gray")
@@ -463,17 +482,19 @@ class UnfilteredZonesDialog(tk.Toplevel):
             ax.axvspan(pending_zone[0], pending_zone[1], facecolor="none",
                        edgecolor=PENDING_COLOR, hatch="//", alpha=0.5, linewidth=1.2)
 
-        ax.set_xlabel("Temps (s)")
-        ax.set_ylabel("Valeur")
+        ax.set_xlabel(t("Temps (s)"))
+        ax.set_ylabel(t("Valeur"))
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8, loc="best")
         if title_parts:
             ax.set_title("\n".join(title_parts), fontsize=9)
         if errors:
-            self.lbl_status.config(text="Erreur : " + " | ".join(errors), foreground="red")
+            self.lbl_status.config(
+                text=t("Erreur : ") + " | ".join(errors), foreground="red"
+            )
         else:
             self.lbl_status.config(
-                text=f"{len(self.zones)} zone(s) définie(s)", foreground="gray"
+                text=t("{n} zone(s) définie(s)", n=len(self.zones)), foreground="gray"
             )
 
         self.fig.tight_layout()

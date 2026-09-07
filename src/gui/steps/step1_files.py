@@ -8,6 +8,7 @@ from tkinter import ttk, filedialog
 
 from core.io import read_multi_column_csv, detect_columns
 from core.constants import generate_file_keys, DEFAULT_INLET_COUNT
+from core.i18n import t
 
 
 class Step1Files(ttk.Frame):
@@ -34,8 +35,8 @@ class Step1Files(ttk.Frame):
         # --- Instructions ---
         instructions = ttk.Label(
             self,
-            text="Importez un fichier CSV multi-colonnes avec header.\n"
-                 "Les colonnes seront auto-détectées et vous pourrez configurer le mapping.",
+            text=t("Importez un fichier CSV multi-colonnes avec header.\n"
+                   "Les colonnes seront auto-détectées et vous pourrez configurer le mapping."),
             font=("Segoe UI", 10),
         )
         instructions.grid(row=0, column=0, sticky="w", pady=(0, 10))
@@ -45,7 +46,7 @@ class Step1Files(ttk.Frame):
         file_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         file_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(file_frame, text="Fichier CSV :", font=("Segoe UI", 10)).grid(
+        ttk.Label(file_frame, text=t("Fichier CSV :"), font=("Segoe UI", 10)).grid(
             row=0, column=0, sticky="w", padx=(0, 10)
         )
 
@@ -53,12 +54,12 @@ class Step1Files(ttk.Frame):
         self.file_entry.grid(row=0, column=1, sticky="ew")
 
         ttk.Button(
-            file_frame, text="Parcourir...", command=self._select_file
+            file_frame, text=t("Parcourir..."), command=self._select_file
         ).grid(row=0, column=2, sticky="w", padx=(10, 0))
 
         # --- Aperçu CSV (Treeview) ---
         preview_label = ttk.Label(
-            self, text="Aperçu du fichier CSV :", font=("Segoe UI", 10, "bold")
+            self, text=t("Aperçu du fichier CSV :"), font=("Segoe UI", 10, "bold")
         )
         preview_label.grid(row=2, column=0, sticky="w", pady=(5, 2))
 
@@ -79,7 +80,7 @@ class Step1Files(ttk.Frame):
 
         # --- Mapping des colonnes (scrollable) ---
         mapping_label = ttk.Label(
-            self, text="Mapping des colonnes :", font=("Segoe UI", 10, "bold")
+            self, text=t("Mapping des colonnes :"), font=("Segoe UI", 10, "bold")
         )
         mapping_label.grid(row=4, column=0, sticky="w", pady=(5, 2))
 
@@ -115,7 +116,7 @@ class Step1Files(ttk.Frame):
         time_frame = ttk.Frame(self.mapping_inner)
         time_frame.pack(fill="x", padx=5, pady=(5, 10))
 
-        ttk.Label(time_frame, text="Colonne temps :", font=("Segoe UI", 10)).pack(
+        ttk.Label(time_frame, text=t("Colonne temps :"), font=("Segoe UI", 10)).pack(
             side="left", padx=(0, 10)
         )
         self.time_combo = ttk.Combobox(time_frame, state="readonly", width=25)
@@ -130,14 +131,14 @@ class Step1Files(ttk.Frame):
 
         # Bouton ajouter
         self.btn_add = ttk.Button(
-            self.mapping_inner, text="+ Ajouter un inlet",
+            self.mapping_inner, text=t("+ Ajouter un inlet"),
             command=self._add_detected_inlet_row,
         )
         self.btn_add.pack(anchor="w", padx=5, pady=(10, 5))
 
         # --- Status ---
         self.lbl_status = ttk.Label(
-            self, text="Aucun fichier chargé", font=("Segoe UI", 9), foreground="gray"
+            self, text=t("Aucun fichier chargé"), font=("Segoe UI", 9), foreground="gray"
         )
         self.lbl_status.grid(row=6, column=0, sticky="w", pady=(5, 0))
 
@@ -145,7 +146,7 @@ class Step1Files(ttk.Frame):
         """Ouvre le dialogue de sélection d'un fichier CSV."""
         filename = filedialog.askopenfilename(
             parent=self,
-            title="Sélectionner le fichier CSV",
+            title=t("Sélectionner le fichier CSV"),
             filetypes=[("CSV", "*.csv"), ("Tous fichiers", "*.*")],
         )
         if filename:
@@ -157,7 +158,7 @@ class Step1Files(ttk.Frame):
             df = read_multi_column_csv(filename)
         except Exception as e:
             self.lbl_status.config(
-                text=f"Erreur de lecture : {e}", foreground="red"
+                text=t("Erreur de lecture : {error}", error=e), foreground="red"
             )
             return
 
@@ -229,7 +230,7 @@ class Step1Files(ttk.Frame):
         idx = len(self.inlet_rows) + 1
 
         frame = ttk.LabelFrame(
-            self.inlets_frame, text=f"Inlet {idx}", padding=5
+            self.inlets_frame, text=t("Inlet {n}", n=idx), padding=5
         )
         frame.pack(fill="x", pady=3)
 
@@ -237,13 +238,13 @@ class Step1Files(ttk.Frame):
         row1 = ttk.Frame(frame)
         row1.pack(fill="x", pady=2)
 
-        ttk.Label(row1, text="Colonne Q :", width=12).pack(side="left")
+        ttk.Label(row1, text=t("Colonne Q :"), width=12).pack(side="left")
         q_combo = ttk.Combobox(row1, values=self.all_columns, state="readonly", width=20)
         q_combo.pack(side="left", padx=(0, 15))
         if q_default and q_default in self.all_columns:
             q_combo.set(q_default)
 
-        ttk.Label(row1, text="Colonne T :", width=12).pack(side="left")
+        ttk.Label(row1, text=t("Colonne T :"), width=12).pack(side="left")
         t_combo = ttk.Combobox(row1, values=self.all_columns, state="readonly", width=20)
         t_combo.pack(side="left", padx=(0, 15))
         if t_default and t_default in self.all_columns:
@@ -253,7 +254,7 @@ class Step1Files(ttk.Frame):
         row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
 
-        ttk.Label(row2, text="Nom export :", width=12).pack(side="left")
+        ttk.Label(row2, text=t("Nom export :"), width=12).pack(side="left")
         name_entry = ttk.Entry(row2, width=20)
         name_entry.pack(side="left", padx=(0, 15))
         if name_default:
@@ -263,7 +264,7 @@ class Step1Files(ttk.Frame):
 
         btn_remove = ttk.Button(
             row2,
-            text="X Supprimer",
+            text=t("X Supprimer"),
             command=lambda: self._remove_inlet_row(row_data),
         )
         btn_remove.pack(side="right")
@@ -291,7 +292,7 @@ class Step1Files(ttk.Frame):
         # Renuméroter
         for i, rd in enumerate(self.inlet_rows):
             rd["idx"] = i + 1
-            rd["frame"].config(text=f"Inlet {i + 1}")
+            rd["frame"].config(text=t("Inlet {n}", n=i + 1))
         self._update_status()
 
     def _add_detected_inlet_row(self):
@@ -310,14 +311,15 @@ class Step1Files(ttk.Frame):
     def _update_status(self):
         """Met à jour le label de status."""
         n = len(self.inlet_rows)
-        text = f"{n} inlet(s) configuré(s)"
+        text = t("{n} inlet(s) configuré(s)", n=n)
 
         # Ne pas masquer des colonnes reconnues mais non proposées
         n_detected = max(len(self.detected_q), len(self.detected_t))
         if n_detected > n:
-            text += (
-                f"  —  {n_detected} paires Q/T reconnues dans le fichier, "
-                f"« + Ajouter un inlet » complète avec les suivantes"
+            text += t(
+                "  —  {n} paires Q/T reconnues dans le fichier, "
+                "« + Ajouter un inlet » complète avec les suivantes",
+                n=n_detected,
             )
         self.lbl_status.config(text=text, foreground="blue")
 
@@ -357,6 +359,29 @@ class Step1Files(ttk.Frame):
                     q_default=q_col, t_default=t_col, name_default=name
                 )
 
+    def snapshot(self):
+        """
+        Enregistre les choix en cours dans app_state, sans validation.
+
+        Permet de reconstruire l'étape, lors d'un changement de langue, sans
+        perdre les colonnes déjà sélectionnées. Les lignes incomplètes sont
+        conservées telles quelles pour ne rien faire disparaître à l'écran.
+        """
+        if self.csv_df is None:
+            return
+
+        self.app_state["time_col"] = self.time_combo.get()
+        mapping, names = [], {}
+        for i, row_data in enumerate(self.inlet_rows):
+            idx = i + 1
+            mapping.append(
+                (row_data["q_combo"].get(), row_data["t_combo"].get(), idx)
+            )
+            names[idx] = row_data["name_entry"].get().strip() or f"inlet{idx}"
+        if mapping:
+            self.app_state["column_mapping"] = mapping
+            self.app_state["inlet_names"] = names
+
     def _get_mapping(self):
         """
         Construit le column_mapping et inlet_names à partir de l'interface.
@@ -366,7 +391,7 @@ class Step1Files(ttk.Frame):
         """
         time_col = self.time_combo.get()
         if not time_col:
-            raise ValueError("Veuillez sélectionner la colonne de temps.")
+            raise ValueError(t("Veuillez sélectionner la colonne de temps."))
 
         column_mapping = []
         inlet_names = {}
@@ -378,9 +403,9 @@ class Step1Files(ttk.Frame):
             name = row_data["name_entry"].get().strip()
 
             if not q_col:
-                raise ValueError(f"Inlet {idx} : colonne Q non sélectionnée.")
+                raise ValueError(t("Inlet {n} : colonne Q non sélectionnée.", n=idx))
             if not t_col:
-                raise ValueError(f"Inlet {idx} : colonne T non sélectionnée.")
+                raise ValueError(t("Inlet {n} : colonne T non sélectionnée.", n=idx))
             if not name:
                 name = f"inlet{idx}"
 
@@ -391,7 +416,7 @@ class Step1Files(ttk.Frame):
             inlet_names[idx] = name
 
         if not column_mapping:
-            raise ValueError("Aucun inlet configuré.")
+            raise ValueError(t("Aucun inlet configuré."))
 
         file_keys = generate_file_keys(len(column_mapping))
 
@@ -405,7 +430,7 @@ class Step1Files(ttk.Frame):
             (is_valid, error_message)
         """
         if self.csv_df is None:
-            return False, "Veuillez sélectionner un fichier CSV."
+            return False, t("Veuillez sélectionner un fichier CSV.")
 
         try:
             time_col, column_mapping, inlet_names, file_keys = self._get_mapping()
@@ -416,10 +441,10 @@ class Step1Files(ttk.Frame):
         all_selected = [time_col]
         for q_col, t_col, _ in column_mapping:
             if q_col in all_selected:
-                return False, f"La colonne '{q_col}' est utilisée plusieurs fois."
+                return False, t("La colonne '{col}' est utilisée plusieurs fois.", col=q_col)
             all_selected.append(q_col)
             if t_col in all_selected:
-                return False, f"La colonne '{t_col}' est utilisée plusieurs fois."
+                return False, t("La colonne '{col}' est utilisée plusieurs fois.", col=t_col)
             all_selected.append(t_col)
 
         # Stocker dans app_state

@@ -10,6 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from core.constants import INTERP_METHODS
+from core.i18n import t
 from core.analysis import (
     slopes_between_samples, slopes_along_curve, max_slope,
     slope_reduction_percent, format_slope_value,
@@ -55,7 +56,7 @@ class Step3Preview(ttk.Frame):
         inlet_names = self.app_state.get("inlet_names", {})
 
         if times is None or not data_interp:
-            self.lbl_info.config(text="Aucune donnée interpolée disponible")
+            self.lbl_info.config(text=t("Aucune donnée interpolée disponible"))
             return
 
         # Info
@@ -67,12 +68,12 @@ class Step3Preview(ttk.Frame):
         zones = params.get("unfiltered_zones", {})
         total_zones = sum(len(z) for z in zones.values())
 
-        info_text = f"Durée : {sim_duration:.6f} s  |  "
-        info_text += f"Pas de temps : {dt:.3e} s  |  "
-        info_text += f"Points : {n_pts:,}  |  "
-        info_text += f"Zones totales : {total_zones}"
-
-        self.lbl_info.config(text=info_text)
+        self.lbl_info.config(text=t(
+            "Durée : {duration} s  |  Pas de temps : {dt} s  |  Points : {points}  |  "
+            "Zones totales : {zones}",
+            duration=f"{sim_duration:.6f}", dt=f"{dt:.3e}",
+            points=f"{n_pts:,}", zones=total_zones,
+        ))
 
         # Déterminer le layout de la grille
         # Séparer les clés Q et T
@@ -124,7 +125,7 @@ class Step3Preview(ttk.Frame):
                         raw_values,
                         "-",
                         color="black",
-                        label="Linéaire",
+                        label=t("Linéaire"),
                         linewidth=0.8,
                         alpha=0.3,
                         zorder=1,
@@ -133,7 +134,7 @@ class Step3Preview(ttk.Frame):
                         df["Time_s"],
                         raw_values,
                         "o",
-                        label="Brut",
+                        label=t("Brut"),
                         markersize=3,
                         alpha=0.8,
                         zorder=3,
@@ -150,9 +151,9 @@ class Step3Preview(ttk.Frame):
                     method_key = methods.get(key, "spline")
 
                     if method_key in INTERP_METHODS:
-                        method_label = INTERP_METHODS[method_key]
+                        method_label = t(INTERP_METHODS[method_key])
                     else:
-                        method_label = "Interpolé"
+                        method_label = t("Traité")
 
                     if method_key == "spline":
                         smooth_params = params.get("smooth_params", {})
@@ -173,14 +174,14 @@ class Step3Preview(ttk.Frame):
                         color="C1",
                     )
 
-                ax.set_xlabel("Temps (s)")
-                ax.set_ylabel("Valeur")
+                ax.set_xlabel(t("Temps (s)"))
+                ax.set_ylabel(t("Valeur"))
 
                 # Titre avec nom personnalisé
                 m = re.search(r"inlet(\d+)", key)
                 inlet_num = int(m.group(1)) if m else col_idx + 1
-                var_type = "Débit" if key.startswith("Q_") else "Température"
-                custom_name = inlet_names.get(inlet_num, f"Inlet {inlet_num}")
+                var_type = t("Débit") if key.startswith("Q_") else t("Température")
+                custom_name = inlet_names.get(inlet_num, t("Inlet {n}", n=inlet_num))
 
                 # Rappel de l'effet du lissage sur les variations brusques,
                 # au moment de la vérification avant export
@@ -221,9 +222,10 @@ class Step3Preview(ttk.Frame):
         if raw_peak is None or curve_peak is None:
             return ""
 
-        summary = (
-            f"Pente max : {format_slope_value(raw_peak['value'])}"
-            f" → {format_slope_value(curve_peak['value'])} /s"
+        summary = t(
+            "Pente max : {raw} → {processed} /s",
+            raw=format_slope_value(raw_peak["value"]),
+            processed=format_slope_value(curve_peak["value"]),
         )
         reduction = slope_reduction_percent(raw_peak, curve_peak)
         if reduction is not None:

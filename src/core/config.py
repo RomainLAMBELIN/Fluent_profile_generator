@@ -126,6 +126,22 @@ class ConfigManager:
             self.config["last_step2_params"] = saveable
             self._save_config()
     
+    def get_language(self):
+        """
+        Code de langue mémorisé, ou None si aucun choix n'a été fait.
+
+        La validation revient au module i18n : une valeur périmée ne doit
+        pas empêcher le démarrage.
+        """
+        code = self.config.get("language")
+        return code if isinstance(code, str) and code else None
+
+    def save_language(self, code):
+        """Mémorise la langue choisie."""
+        if isinstance(code, str) and code:
+            self.config["language"] = code
+            self._save_config()
+
     def get_last_export_dir(self):
         """Récupère le dernier répertoire d'export utilisé."""
         return self.config.get("last_export_dir", "")

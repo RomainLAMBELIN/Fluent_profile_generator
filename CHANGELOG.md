@@ -17,6 +17,9 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 - Affichage des dérivées à l'étape 2, activable ou non : les pentes des courbes brute et traitée sont tracées sous la courbe, avec la pente maximale de chacune, l'instant où elle est atteinte, et le pourcentage de réduction obtenu
 - Repérage visuel de la pente maximale sur les deux panneaux (losange et trait pointillé), et bascule automatique en échelle logarithmique symétrique quand un pic isolé écrase le reste
 - Rappel de la réduction de pente dans les titres de l'étape 3, au moment de la vérification avant export
+- Interface disponible en français et en anglais, avec un sélecteur de langue en haut à droite, accessible depuis toutes les étapes
+- Bascule de langue à chaud, sans perdre l'état en cours : fichier chargé, mapping des colonnes, méthodes, paramètres et zones sont conservés
+- Langue mémorisée d'une session à l'autre ; le français reste la langue par défaut
 
 ### Corrigé
 - Sauts de valeur aux frontières des zones avec Spline et Trend Filter : les segments sont désormais raccordés en valeur (continuité C0) et partagent leurs points frontière

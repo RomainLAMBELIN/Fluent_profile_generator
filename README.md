@@ -13,6 +13,7 @@ Application permettant de transformer des fichiers CSV de débits (Q) et tempér
 - **Visualisation interactive** : prévisualisation en temps réel des courbes
 - **Navigation flexible** : possibilité de revenir en arrière pour ajuster les paramètres
 - **Export optimisé** : génération de fichiers `.prof` au format Fluent
+- **Français et anglais** : sélecteur de langue accessible depuis toutes les étapes
 
 ## 🚀 Installation
 
@@ -49,6 +50,13 @@ python launch.py
 ```bash
 make run
 ```
+
+### Langue
+
+L'application démarre en français. Le sélecteur en haut à droite bascule vers
+l'anglais, et inversement, sans perdre le travail en cours : fichier chargé,
+mapping, méthodes et zones sont conservés. Le choix est mémorisé pour les
+sessions suivantes.
 
 ### Workflow
 
