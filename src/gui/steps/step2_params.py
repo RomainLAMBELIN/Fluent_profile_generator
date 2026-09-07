@@ -47,11 +47,9 @@ class Step2Parameters(ttk.Frame):
 
         self.method_vars = {}
         self.smooth_vars = {}
-        self.smooth_labels = {}
         self.smooth_scales = {}
         self.smooth_entries = {}
         self.lambda_vars = {}
-        self.lambda_labels = {}
         self.lambda_scales = {}
         self.lambda_entries = {}
         self.lambda_frames = {}
@@ -124,13 +122,14 @@ class Step2Parameters(ttk.Frame):
                 else:
                     params["trend_lambda"][key] = DEFAULT_TREND_LAMBDA
 
-        # Inversion des courbes (par courbe)
+        # Inversion des courbes (par courbe) - volontairement non persistée
+        # entre sessions : une inversion silencieuse sur un nouveau fichier
+        # serait une source d'erreur.
         if "inverted" not in params:
             params["inverted"] = {}
-        saved_inverted = last_params.get("inverted", {})
         for key in self.file_keys:
             if key not in params["inverted"]:
-                params["inverted"][key] = saved_inverted.get(key, False)
+                params["inverted"][key] = False
 
     def _build_ui(self):
         """Construction de l'interface."""
@@ -161,8 +160,13 @@ class Step2Parameters(ttk.Frame):
             lambda e: scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all")),
         )
 
-        scroll_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas_window = scroll_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        # Le cadre défilant occupe toute la largeur du canvas
+        scroll_canvas.bind(
+            "<Configure>",
+            lambda e: scroll_canvas.itemconfigure(canvas_window, width=e.width),
+        )
 
         scroll_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -193,8 +197,9 @@ class Step2Parameters(ttk.Frame):
 
         # Bouton Aide
         ttk.Button(
-            row, text="? Aide", command=self._show_help_dialog, width=8
-        ).pack(side="right", padx=10)
+            global_params, text="? Aide sur les méthodes et les zones",
+            command=self._show_help_dialog,
+        ).pack(fill="x", pady=(8, 0))
 
         # Configuration par courbe
         curve_labels = generate_file_labels(self.inlet_names)
@@ -288,9 +293,6 @@ class Step2Parameters(ttk.Frame):
         scale.pack(side="left", fill="x", expand=True, padx=5)
         self.smooth_scales[key] = scale
 
-        lbl = ttk.Label(smooth_row, text=f"{self.smooth_vars[key].get():.4f}", width=8)
-        lbl.pack(side="left")
-        self.smooth_labels[key] = lbl
 
         # Lambda (pour Trend Filter)
         lambda_row = ttk.Frame(frame)
@@ -329,9 +331,6 @@ class Step2Parameters(ttk.Frame):
         lambda_scale.pack(side="left", fill="x", expand=True, padx=5)
         self.lambda_scales[key] = lambda_scale
 
-        lambda_lbl = ttk.Label(lambda_row, text=f"{self.lambda_vars[key].get():.2f}", width=8)
-        lambda_lbl.pack(side="left")
-        self.lambda_labels[key] = lambda_lbl
 
         # Afficher/cacher selon la méthode initiale
         self._update_param_visibility(key)
@@ -397,7 +396,6 @@ class Step2Parameters(ttk.Frame):
     def _on_smooth_change(self, key):
         """Callback quand le lissage change."""
         value = self.smooth_vars[key].get()
-        self.smooth_labels[key].config(text=f"{value:.4f}")
         self.app_state["params"]["smooth_params"][key] = value
         self._update_info_label()
         self._update_preview()
@@ -412,7 +410,6 @@ class Step2Parameters(ttk.Frame):
     def _on_lambda_change(self, key):
         """Callback quand le paramètre lambda change."""
         value = self.lambda_vars[key].get()
-        self.lambda_labels[key].config(text=f"{value:.2f}")
         self.app_state["params"]["trend_lambda"][key] = value
         self._update_preview()
 
@@ -469,6 +466,10 @@ Zone "Linéaire"
    Ignore les points intermédiaires.
    Utile pour simplifier une région ou créer une rampe.
 
+Les bornes d'une zone sont ajustées aux points de mesure les plus
+proches. Le raccord entre une zone et le reste de la courbe est
+continu (la courbe lissée passe par la valeur mesurée à la frontière).
+
 """
         help_content += "=" * 60 + "\n"
         help_content += "RECOMMANDATIONS CFD\n" + "=" * 60 + "\n\n"
@@ -502,20 +503,26 @@ Recommandations :
         method = _METHOD_DISPLAY_TO_KEY.get(method_display, "pchip")
         smooth = self.smooth_vars[key].get()
 
+        if df is None or len(df) < 2:
+            return
+
         dialog = UnfilteredZonesDialog(
             self,
             sim_duration,
             zones,
-            title=f"Zones - {var_type} {custom_name}",
+            title=f"Zones spéciales - {var_type} {custom_name}",
             df=df,
             current_method=method,
             current_smooth=smooth,
+            trend_lambda=self.lambda_vars[key].get(),
+            inverted=self.invert_vars[key].get(),
         )
         self.wait_window(dialog)
 
         if dialog.result is not None:
             self.app_state["params"]["unfiltered_zones"][key] = dialog.result
             self._update_zones_labels()
+            self._update_info_label()
             self._update_preview()
 
     def _update_zones_labels(self):
@@ -616,6 +623,12 @@ Recommandations :
                         times_preview, interp * invert_coeff, "-", label=label,
                         linewidth=2.5, zorder=2, color="C1",
                     )
+
+                    # Zones spéciales (vert : exacte, violet : linéaire)
+                    for zone in zones:
+                        z_type = zone[2] if len(zone) >= 3 else "exact"
+                        z_color = "tab:green" if z_type == "exact" else "tab:purple"
+                        ax.axvspan(zone[0], zone[1], color=z_color, alpha=0.12, linewidth=0)
 
                     error = compute_interpolation_error(df, times_preview, interp)
                     error_text = format_error_text(error)

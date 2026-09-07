@@ -68,19 +68,20 @@ class FluentProfGenerator(tk.Tk):
             if os.path.exists(last_csv):
                 self.app_state["csv_file"] = last_csv
 
+        # ConfigManager garantit la structure ou retourne un dict vide :
+        # une configuration inutilisable n'empeche pas le demarrage.
         last_mapping = self.config_manager.get_last_column_mapping()
-        if last_mapping:
+        inlets = last_mapping.get("inlets", [])
+        if inlets:
             self.app_state["time_col"] = last_mapping.get("time_col", "")
-            inlets = last_mapping.get("inlets", [])
-            if inlets:
-                self.app_state["column_mapping"] = [
-                    (i["q_col"], i["t_col"], idx + 1)
-                    for idx, i in enumerate(inlets)
-                ]
-                self.app_state["inlet_names"] = {
-                    idx + 1: i["name"]
-                    for idx, i in enumerate(inlets)
-                }
+            self.app_state["column_mapping"] = [
+                (inlet["q_col"], inlet["t_col"], idx + 1)
+                for idx, inlet in enumerate(inlets)
+            ]
+            self.app_state["inlet_names"] = {
+                idx + 1: inlet["name"]
+                for idx, inlet in enumerate(inlets)
+            }
 
         # Charger les derniers noms d'inlets (override si présents)
         last_inlet_names = self.config_manager.get_last_inlet_names()
