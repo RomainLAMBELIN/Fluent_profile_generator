@@ -24,6 +24,8 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 ### Corrigé
 - Sauts de valeur aux frontières des zones avec Spline et Trend Filter : les segments sont désormais raccordés en valeur (continuité C0) et partagent leurs points frontière
 - Trend Filter L1/L2 : les différences finies tiennent compte de l'espacement réel des temps (plus de pente aberrante entre deux mesures rapprochées, ex. 84.9 ms et 85.0 ms)
+- Trend Filter L1 quasi sans effet sur les températures, même au maximum du curseur : la pénalité L1 croît avec l'amplitude des données alors que la fidélité croît avec son carré, donc une même valeur de lambda lissait fortement un débit de quelques unités et laissait intacte une température de plusieurs centaines de kelvins. Lambda est désormais relatif à la courbure typique des données, avec un effet identique quel que soit leur ordre de grandeur
+- Trend Filter L1 : l'algorithme pouvait s'arrêter avant convergence (critère sur le seul résidu primal, 300 itérations) ; les deux résidus sont maintenant contrôlés, avec une tolérance elle aussi relative à l'échelle des données
 - Extrapolation polynomiale au-delà des données (PCHIP/Spline divergeaient) : prolongement constant
 - Zones plus fines que le pas de mesure, chevauchantes ou hors plage : gestion explicite (élargies à 2 points, tronquées ou ignorées)
 - Prévisualisation du dialogue de zones qui ne fonctionnait plus (arguments obsolètes passés à `interpolate()`), et lambda du Trend Filter non pris en compte dans cette prévisualisation

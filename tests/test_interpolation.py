@@ -216,3 +216,33 @@ def test_duplicate_and_unsorted_times_are_cleaned():
                        "Value": [3.0, 0.0, 1.0, 9.0, 2.0, 4.0, 5.0]})
     y = interpolate(df, np.array([0.05, 0.15]), method="linear")
     np.testing.assert_allclose(y, [0.5, 1.5])
+
+
+@pytest.mark.parametrize("method", ["trend_l1", "trend_l2"])
+def test_trend_filter_smoothing_is_scale_invariant(method):
+    """
+    Une même forme de courbe doit être lissée dans les mêmes proportions
+    quelle que soit son amplitude. Le L1 ne l'était pas : à lambda égal, une
+    température de plusieurs centaines de kelvins restait quasi intacte
+    alors qu'un débit de quelques unités était fortement lissé.
+    """
+    rng = np.random.RandomState(3)
+    x = np.linspace(0, 0.5, 80)
+    shape = np.sin(2 * np.pi * x / 0.5) + 0.15 * rng.randn(80)
+    t = np.linspace(0, 0.5, 2000)
+
+    ratios = []
+    for amplitude in (1.0, 300.0):
+        y = 350.0 + amplitude * shape
+        df = pd.DataFrame({"Time_s": x, "Value": y})
+        z = interpolate(df, x, method=method, trend_lambda=5.0)
+        ratios.append(np.sqrt(np.mean((z - y) ** 2)) / amplitude)
+
+    assert ratios[0] > 0.01, "le lissage doit avoir un effet mesurable"
+    assert ratios[1] == pytest.approx(ratios[0], rel=0.05)
+
+
+def test_trend_l1_leaves_linear_data_untouched():
+    df = pd.DataFrame({"Time_s": np.linspace(0, 1, 30), "Value": 2.0 * np.linspace(0, 1, 30) + 1.0})
+    z = interpolate(df, df["Time_s"].to_numpy(), method="trend_l1", trend_lambda=50.0)
+    np.testing.assert_allclose(z, df["Value"].to_numpy(), atol=1e-9)

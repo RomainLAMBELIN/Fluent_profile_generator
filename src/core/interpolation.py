@@ -155,10 +155,17 @@ def _trend_filter_l2(y: np.ndarray, x: np.ndarray, lambda_param: float,
 
 
 def _trend_filter_l1(y: np.ndarray, x: np.ndarray, lambda_param: float,
-                     order: int = 2, max_iter: int = 300, tol: float = 1e-6) -> np.ndarray:
+                     order: int = 2, max_iter: int = 3000, tol: float = 1e-5) -> np.ndarray:
     """
     Trend Filtering avec pénalité L1 (Total Variation) via ADMM :
-        min_z ||y - z||² + lambda ||D z||_1
+        min_z ½||y - z||² + lambda_abs ||D z||_1
+
+    lambda_param est relatif à la courbure typique des données (moyenne de
+    |D y|). Contrairement au cas L2, où fidélité et pénalité sont toutes deux
+    quadratiques, la pénalité L1 croît linéairement avec l'amplitude alors
+    que la fidélité croît quadratiquement. Sans normalisation, une même
+    valeur de lambda lisse fortement un débit de quelques unités et laisse
+    quasi intacte une température de plusieurs centaines de kelvins.
     """
     y = np.asarray(y, dtype=float)
     n = len(y)
@@ -167,7 +174,14 @@ def _trend_filter_l1(y: np.ndarray, x: np.ndarray, lambda_param: float,
 
     D = _difference_matrix(x, order)
     DT = D.T.tocsc()
-    rho = max(1.0, float(lambda_param))
+
+    curvature_scale = float(np.mean(np.abs(D @ y)))
+    if curvature_scale <= 0:
+        # Données déjà linéaires : rien à lisser
+        return y.copy()
+    lam = lambda_param * curvature_scale
+
+    rho = max(1.0, lam)
     A = (identity(n, format="csc") + rho * (DT @ D)).tocsc()
     lu = splu(A)
 
@@ -175,15 +189,23 @@ def _trend_filter_l1(y: np.ndarray, x: np.ndarray, lambda_param: float,
     z = y.copy()
     u = np.zeros(m)
     w = np.zeros(m)
-    threshold = lambda_param / rho
+    threshold = lam / rho
+    # Tolérance relative à l'échelle des données : un seuil absolu rendrait
+    # l'arrêt lui aussi dépendant de l'ordre de grandeur des valeurs
+    stop = tol * np.sqrt(n) * curvature_scale
 
     for _ in range(max_iter):
         z = lu.solve(y + rho * (DT @ (w - u)))
         Dz = D @ z
         v = Dz + u
-        w = np.sign(v) * np.maximum(np.abs(v) - threshold, 0.0)
+        w_new = np.sign(v) * np.maximum(np.abs(v) - threshold, 0.0)
+        # Les deux résidus sont requis : le seul résidu primal peut être
+        # petit bien avant que la solution soit stabilisée
+        primal = np.linalg.norm(Dz - w_new)
+        dual = rho * np.linalg.norm(DT @ (w_new - w))
+        w = w_new
         u = u + Dz - w
-        if np.linalg.norm(Dz - w) < tol * np.sqrt(n):
+        if primal < stop and dual < stop:
             break
     return z
 

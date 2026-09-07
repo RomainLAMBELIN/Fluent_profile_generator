@@ -66,7 +66,7 @@ Préserve mieux les changements brusques légitimes.
 Avantages : Très robuste au bruit, préserve les transitions
 Inconvénients : Peut créer des "plateaux"
 
-Paramètre lambda : Plus grand = plus simple (typique: 1-20)
+Paramètre lambda : Plus grand = plus simple (typique: 1-20), relatif à la courbure typique des données, donc même effet quel que soit leur ordre de grandeur
 Recommandé pour : Données très bruitées avec transitions nettes""",
 
     "linear": """Interpolation Linéaire
