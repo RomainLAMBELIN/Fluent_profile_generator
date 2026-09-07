@@ -13,6 +13,9 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 - Deux inlets créés par défaut quand l'auto-détection des colonnes ne trouve rien
 - Nouveau dialogue de zones : liste des zones, sélection par cliquer-glisser sur le graphique, saisie des bornes, prévisualisation temps réel (sans zone / avec zones / zone en édition), bornes ajustées aux points de mesure
 - Suite de tests `tests/` (toutes les combinaisons méthode × zones, continuité, extrapolation, grille non uniforme, inversion, décalage temporel)
+- Lanceur autonome `launch.py` : l'application démarre sans être installée comme module (ni `pip install`, ni `setup.py`, ni `PYTHONPATH`), depuis n'importe quel répertoire courant
+- `python launch.py --check` : diagnostic de l'environnement (version et chemin de Python, présence de tkinter et des bibliothèques, provenance des modules du projet)
+- Affichage des erreurs de démarrage dans une fenêtre, pour rester lisible lors d'un double-clic sans console
 
 ### Corrigé
 - Sauts de valeur aux frontières des zones avec Spline et Trend Filter : les segments sont désormais raccordés en valeur (continuité C0) et partagent leurs points frontière
@@ -23,6 +26,8 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 - Pas de temps du profil exporté désormais exactement égal à dt (`np.arange` au lieu de `linspace` avec arrondi)
 - Bandeau d'informations de l'étape 2 non rafraîchi après modification des zones
 - Panneau de paramètres de l'étape 2 tronqué à droite
+- `run.bat` et `run.sh` : détection de l'interpréteur Python, exécution depuis le dossier du script, fenêtre maintenue ouverte en cas d'erreur
+- Backend matplotlib forcé sur TkAgg au démarrage (évite un conflit avec le backend Qt ou « inline » configuré par Anaconda ou Spyder)
 
 ### Modifié
 - Trend Filter : résolution par matrices creuses (mémoire et temps réduits sur grandes séries)

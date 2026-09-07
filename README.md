@@ -16,43 +16,64 @@ Application permettant de transformer des fichiers CSV de débits (Q) et tempér
 
 ## 🚀 Installation
 
+**Aucune installation n'est nécessaire.** Copiez le dossier du projet où vous
+voulez et lancez `launch.py` : le script rend lui-même le projet importable.
+Pas de `pip install`, pas de `setup.py`, pas de `PYTHONPATH` à configurer.
+
 ### Prérequis
 
-- Python 3.8+
-- pip
+- Python 3.8 ou supérieur, avec `tkinter`
+- Les bibliothèques `numpy`, `pandas`, `scipy` et `matplotlib`
 
-### Installation des dépendances
+Ces éléments sont déjà présents dans une installation Anaconda standard et
+dans les installateurs officiels de Python pour Windows.
+
+### Vérifier l'environnement
 
 ```bash
-pip install -r requirements.txt
+python launch.py --check
+```
+
+Le rapport indique la version de Python utilisée, la présence de chaque
+bibliothèque et l'emplacement depuis lequel les modules du projet seront
+chargés. C'est le premier réflexe en cas de problème.
+
+### Si une bibliothèque manque
+
+Une installation dans votre espace utilisateur ne demande aucun droit
+administrateur :
+
+```bash
+pip install --user numpy pandas scipy matplotlib
 ```
 
 ## 💻 Utilisation
 
 ### Lancement de l'application
 
-**Méthode 1 - Scripts rapides (recommandé)** :
+**Windows** : double-cliquez sur `run.bat`, ou sur `launch.py`.
+
+**Linux / Mac** :
 ```bash
-# Linux/Mac
 ./run.sh
-
-# Windows
-run.bat
 ```
 
-**Méthode 2 - Script Python** :
+**Depuis un terminal**, quel que soit le répertoire courant :
 ```bash
+python /chemin/vers/le/projet/launch.py
+```
+
+Avec Anaconda sous Windows, si `python` n'est pas reconnu dans l'invite de
+commandes classique, ouvrez **Anaconda Prompt** puis :
+
+```bash
+cd /d C:\chemin\vers\le\projet
 python launch.py
-```
-
-**Méthode 3 - Make** :
-```bash
-make run
 ```
 
 ### Workflow
 
-1. **Sélection des fichiers** : Choisir les 4 fichiers CSV (Q_inlet1, T_inlet1, Q_inlet2, T_inlet2)
+1. **Import du CSV** : Choisir un fichier CSV multi-colonnes et associer les colonnes à chaque inlet
 2. **Paramétrage** : Ajuster le pas de temps et les facteurs de lissage avec prévisualisation
 3. **Prévisualisation** : Vérifier les courbes interpolées
 4. **Export** : Sauvegarder le fichier `.prof`
@@ -129,14 +150,24 @@ Les paramètres par défaut peuvent être modifiés dans `src/core/constants.py`
 
 ## ❓ Dépannage
 
-### `ImportError: attempted relative import`
+### `ModuleNotFoundError: No module named 'core'` (ou `gui`)
 
-Lancez l'application depuis la racine avec `python launch.py` ou `run.bat` / `./run.sh`.
+Lancez toujours `launch.py`, jamais un fichier situé dans `src/` directement.
+C'est `launch.py` qui rend les modules du projet importables.
+
+### L'application ne démarre pas quand je double-clique
+
+Lancez `run.bat` : la fenêtre reste ouverte et affiche l'erreur. Sinon,
+exécutez `python launch.py --check` pour un diagnostic complet.
 
 ### `ModuleNotFoundError: No module named 'numpy'`
 
+Le Python utilisé n'est pas celui d'Anaconda. `python launch.py --check`
+affiche l'exécutable réellement employé. Ouvrez **Anaconda Prompt**, ou
+installez les bibliothèques dans votre espace utilisateur :
+
 ```bash
-pip install -r requirements.txt
+pip install --user numpy pandas scipy matplotlib
 ```
 
 ### tkinter non disponible (Linux)
