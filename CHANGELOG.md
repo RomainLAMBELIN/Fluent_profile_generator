@@ -10,7 +10,8 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 ### Ajouté
 - Option « Inverser la courbe (×-1) » par courbe à l'étape 2 (appliquée à la prévisualisation et à l'export, y compris au remplacement des débits nuls)
 - Décalage automatique de l'axe temporel : le premier instant mesuré devient 0 ms
-- Deux inlets proposés par défaut dès l'ouverture de l'application, et quand l'auto-détection des colonnes ne reconnaît rien (nombre réglable par `DEFAULT_INLET_COUNT`)
+- Deux inlets proposés par défaut dans tous les cas, à l'ouverture comme à l'import d'un fichier, quel que soit le nombre de colonnes reconnues (nombre réglable par `DEFAULT_INLET_COUNT`)
+- Les paires Q/T reconnues au-delà des deux proposées sont signalées dans le bandeau de statut, et « + Ajouter un inlet » les pré-remplit dans l'ordre
 - Nouveau dialogue de zones : liste des zones, sélection par cliquer-glisser sur le graphique, saisie des bornes, prévisualisation temps réel (sans zone / avec zones / zone en édition), bornes ajustées aux points de mesure
 - Suite de tests `tests/` (toutes les combinaisons méthode × zones, continuité, extrapolation, grille non uniforme, inversion, décalage temporel)
 - Affichage des dérivées à l'étape 2, activable ou non : les pentes des courbes brute et traitée sont tracées sous la courbe, avec la pente maximale de chacune, l'instant où elle est atteinte, et le pourcentage de réduction obtenu

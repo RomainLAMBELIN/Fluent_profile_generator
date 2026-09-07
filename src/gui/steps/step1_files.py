@@ -19,6 +19,9 @@ class Step1Files(ttk.Frame):
         self.csv_df = None
         self.all_columns = []
         self.inlet_rows = []  # Liste de dicts {frame, q_combo, t_combo, name_entry, idx}
+        # Paires Q/T reconnues dans le fichier, au-delà de celles proposées
+        self.detected_q = []
+        self.detected_t = []
         self._build_ui()
         self._restore_state()
 
@@ -127,7 +130,8 @@ class Step1Files(ttk.Frame):
 
         # Bouton ajouter
         self.btn_add = ttk.Button(
-            self.mapping_inner, text="+ Ajouter un inlet", command=self._add_inlet_row
+            self.mapping_inner, text="+ Ajouter un inlet",
+            command=self._add_detected_inlet_row,
         )
         self.btn_add.pack(anchor="w", padx=5, pady=(10, 5))
 
@@ -182,18 +186,17 @@ class Step1Files(ttk.Frame):
         self._clear_inlet_rows()
 
         # Auto-pairing : zip(q_cols triées, t_cols triées)
-        q_cols = sorted(detected["q_cols"])
-        t_cols = sorted(detected["t_cols"])
+        self.detected_q = sorted(detected["q_cols"])
+        self.detected_t = sorted(detected["t_cols"])
 
-        n_pairs = max(len(q_cols), len(t_cols))
-        if n_pairs == 0:
-            # Aucune colonne reconnue : proposer la configuration par défaut
-            self._ensure_default_inlet_rows()
-        else:
-            for i in range(n_pairs):
-                q = q_cols[i] if i < len(q_cols) else ""
-                t = t_cols[i] if i < len(t_cols) else ""
-                self._add_inlet_row(q_default=q, t_default=t)
+        # Toujours le même nombre d'inlets proposés, quel que soit le fichier.
+        # Les paires reconnues au-delà sont signalées dans le statut et
+        # pré-remplies au fur et à mesure des ajouts.
+        for i in range(DEFAULT_INLET_COUNT):
+            self._add_inlet_row(
+                q_default=self.detected_q[i] if i < len(self.detected_q) else "",
+                t_default=self.detected_t[i] if i < len(self.detected_t) else "",
+            )
 
         self._update_status()
 
@@ -291,12 +294,32 @@ class Step1Files(ttk.Frame):
             rd["frame"].config(text=f"Inlet {i + 1}")
         self._update_status()
 
+    def _add_detected_inlet_row(self):
+        """
+        Ajoute un inlet, pré-rempli avec la paire Q/T reconnue suivante.
+
+        Évite de ressaisir à la main les colonnes déjà identifiées dans le
+        fichier mais non proposées par défaut.
+        """
+        idx = len(self.inlet_rows)
+        self._add_inlet_row(
+            q_default=self.detected_q[idx] if idx < len(self.detected_q) else "",
+            t_default=self.detected_t[idx] if idx < len(self.detected_t) else "",
+        )
+
     def _update_status(self):
         """Met à jour le label de status."""
         n = len(self.inlet_rows)
-        self.lbl_status.config(
-            text=f"{n} inlet(s) configuré(s)", foreground="blue"
-        )
+        text = f"{n} inlet(s) configuré(s)"
+
+        # Ne pas masquer des colonnes reconnues mais non proposées
+        n_detected = max(len(self.detected_q), len(self.detected_t))
+        if n_detected > n:
+            text += (
+                f"  —  {n_detected} paires Q/T reconnues dans le fichier, "
+                f"« + Ajouter un inlet » complète avec les suivantes"
+            )
+        self.lbl_status.config(text=text, foreground="blue")
 
     def _ensure_default_inlet_rows(self):
         """
