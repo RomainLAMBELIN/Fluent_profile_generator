@@ -2,11 +2,12 @@
 Étape 1 : Import d'un fichier CSV multi-colonnes avec mapping dynamique des inlets
 """
 
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog
 
 from core.io import read_multi_column_csv, detect_columns
-from core.constants import generate_file_keys
+from core.constants import generate_file_keys, DEFAULT_INLET_COUNT
 
 
 class Step1Files(ttk.Frame):
@@ -186,9 +187,8 @@ class Step1Files(ttk.Frame):
 
         n_pairs = max(len(q_cols), len(t_cols))
         if n_pairs == 0:
-            # Pas de détection : créer 2 inlets vides par défaut
-            self._add_inlet_row()
-            self._add_inlet_row()
+            # Aucune colonne reconnue : proposer la configuration par défaut
+            self._ensure_default_inlet_rows()
         else:
             for i in range(n_pairs):
                 q = q_cols[i] if i < len(q_cols) else ""
@@ -298,29 +298,41 @@ class Step1Files(ttk.Frame):
             text=f"{n} inlet(s) configuré(s)", foreground="blue"
         )
 
+    def _ensure_default_inlet_rows(self):
+        """
+        Complète la liste jusqu'au nombre d'inlets proposé par défaut.
+
+        Sans cela, l'application s'ouvre sur une zone de mapping vide, sans
+        indiquer qu'un inlet se configure ici.
+        """
+        while len(self.inlet_rows) < DEFAULT_INLET_COUNT:
+            self._add_inlet_row()
+
     def _restore_state(self):
         """Restaure l'état depuis app_state (fichier et mapping précédents)."""
         csv_file = self.app_state.get("csv_file", "")
-        if csv_file:
-            import os
-            if os.path.exists(csv_file):
-                self._load_csv(csv_file)
+        if not csv_file or not os.path.exists(csv_file):
+            # Aucun fichier mémorisé : proposer la configuration par défaut
+            self._ensure_default_inlet_rows()
+            return
 
-                # Restaurer le mapping si disponible
-                mapping = self.app_state.get("column_mapping")
-                inlet_names = self.app_state.get("inlet_names", {})
-                time_col = self.app_state.get("time_col", "")
+        self._load_csv(csv_file)
 
-                if time_col and time_col in self.all_columns:
-                    self.time_combo.set(time_col)
+        # Restaurer le mapping si disponible
+        mapping = self.app_state.get("column_mapping")
+        inlet_names = self.app_state.get("inlet_names", {})
+        time_col = self.app_state.get("time_col", "")
 
-                if mapping:
-                    self._clear_inlet_rows()
-                    for q_col, t_col, inlet_idx in mapping:
-                        name = inlet_names.get(inlet_idx, f"inlet{inlet_idx}")
-                        self._add_inlet_row(
-                            q_default=q_col, t_default=t_col, name_default=name
-                        )
+        if time_col and time_col in self.all_columns:
+            self.time_combo.set(time_col)
+
+        if mapping:
+            self._clear_inlet_rows()
+            for q_col, t_col, inlet_idx in mapping:
+                name = inlet_names.get(inlet_idx, f"inlet{inlet_idx}")
+                self._add_inlet_row(
+                    q_default=q_col, t_default=t_col, name_default=name
+                )
 
     def _get_mapping(self):
         """

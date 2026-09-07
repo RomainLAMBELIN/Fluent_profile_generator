@@ -101,6 +101,9 @@ SMOOTH_MAX = 0.1
 # Performance - limite de points pour la prévisualisation
 MAX_PREVIEW_POINTS = 5000
 
+# Nombre d'inlets proposés par défaut, tant qu'aucune colonne n'est détectée
+DEFAULT_INLET_COUNT = 2
+
 # ---------------------------------------------------------------------------
 # Patterns regex pour auto-détection des colonnes CSV
 # ---------------------------------------------------------------------------
