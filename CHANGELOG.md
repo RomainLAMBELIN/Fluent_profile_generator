@@ -23,6 +23,8 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 - Pas de temps du profil exporté désormais exactement égal à dt (`np.arange` au lieu de `linspace` avec arrondi)
 - Bandeau d'informations de l'étape 2 non rafraîchi après modification des zones
 - Panneau de paramètres de l'étape 2 tronqué à droite
+- Plantage au démarrage (`KeyError: 'q_col'`) quand le fichier de configuration utilisateur provient d'une version antérieure : la configuration est désormais validée, et ignorée en bloc si elle est inutilisable, au lieu d'empêcher l'application de démarrer
+- Noms d'inlets personnalisés perdus silencieusement au redémarrage : JSON ne stocke que des clés textuelles alors que le code les recherchait par index entier
 
 ### Modifié
 - Trend Filter : résolution par matrices creuses (mémoire et temps réduits sur grandes séries)
