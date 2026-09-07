@@ -44,8 +44,51 @@ def project_root():
     return os.path.dirname(here)
 
 
+def candidate_roots():
+    """Emplacements possibles du code, selon la version du projet."""
+    root = project_root()
+    return [os.path.join(root, "src"), root]
+
+
+def find_app_root():
+    """
+    Cherche le dossier contenant le code de l'application.
+
+    Les anciennes versions placent les paquets a la racine, les recentes
+    dans ``src``. Le repere est le fichier ``gui/app.py``.
+
+    Returns:
+        Chemin du dossier a ajouter au chemin d'import, ou None
+    """
+    for base in candidate_roots():
+        if os.path.isfile(os.path.join(base, "gui", "app.py")):
+            return base
+    return None
+
+
+def describe_layout():
+    """Decrit ce qui a ete trouve, pour un message d'erreur exploitable."""
+    lines = []
+    for base in candidate_roots():
+        label = os.path.relpath(base, project_root()) or "."
+        if not os.path.isdir(base):
+            lines.append("  {} : dossier absent".format(label))
+            continue
+        try:
+            entries = sorted(
+                name for name in os.listdir(base)
+                if not name.startswith(".") and not name.endswith(".pyc")
+            )
+        except OSError as exc:
+            lines.append("  {} : illisible ({})".format(label, exc))
+            continue
+        lines.append("  {} : {}".format(label, ", ".join(entries) if entries else "vide"))
+    return "\n".join(lines)
+
+
 def src_dir():
-    return os.path.join(project_root(), "src")
+    """Dossier du code, pour l'affichage. Peut ne pas exister."""
+    return find_app_root() or os.path.join(project_root(), "src")
 
 
 def add_src_to_path():
@@ -53,32 +96,25 @@ def add_src_to_path():
     Rend les paquets du projet importables sans installation.
 
     Returns:
-        Chemin du dossier ``src``
+        Chemin du dossier ajoute au chemin d'import
 
     Raises:
-        RuntimeError: si le dossier ``src`` est absent ou incomplet
+        RuntimeError: si le code de l'application est introuvable
     """
-    src = src_dir()
-    if not os.path.isdir(src):
+    base = find_app_root()
+    if base is None:
         raise RuntimeError(
-            "Dossier 'src' introuvable a cote de launch.py.\n\n"
-            "Attendu : {}\n\n"
-            "Verifiez que le dossier du projet a ete copie en entier.".format(src)
-        )
-    missing = [
-        name for name in ("core", "gui")
-        if not os.path.isdir(os.path.join(src, name))
-    ]
-    if missing:
-        raise RuntimeError(
-            "Le dossier 'src' est incomplet : {} manquant(s).\n\n"
-            "Recopiez le projet en entier.".format(", ".join(sorted(missing)))
+            "Le fichier 'gui/app.py' est introuvable a partir de :\n{}\n\n"
+            "Contenu examine :\n{}\n\n"
+            "Votre copie du projet est probablement plus ancienne que ce "
+            "lanceur, ou incomplete. Recuperez la derniere version du "
+            "projet, puis relancez.".format(project_root(), describe_layout())
         )
 
-    if src in sys.path:
-        sys.path.remove(src)
-    sys.path.insert(0, src)
-    return src
+    if base in sys.path:
+        sys.path.remove(base)
+    sys.path.insert(0, base)
+    return base
 
 
 # ---------------------------------------------------------------------
@@ -185,7 +221,11 @@ def run_check():
     lines.append("Python      : {}".format(sys.version.split()[0]))
     lines.append("Executable  : {}".format(sys.executable))
     lines.append("Projet      : {}".format(project_root()))
-    lines.append("Dossier src : {}".format(src_dir()))
+    found = find_app_root()
+    lines.append("Code        : {}".format(found if found else "INTROUVABLE"))
+    if found is None:
+        lines.append("Contenu examine :")
+        lines.append(describe_layout())
     lines.append("")
 
     problem = check_python()
